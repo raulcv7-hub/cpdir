@@ -1,8 +1,7 @@
-//! Pure TUI state machine driving tree navigation, modals, and exit intents.
+//! Pure TUI state machine driving selection, modals, and exit intents.
 
-use crate::domain::{
-    DirectoryTree, InspectorCategory, InspectorItem, NodeId, NodeKind, TreeMetrics, VisibleRow,
-};
+use crate::domain::{DirectoryTree, InspectorCategory, InspectorItem, TreeMetrics, VisibleRow};
+use crate::tui::inspector_state::InspectorState;
 
 /// Active view layer controlling key handling and modal overlays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,17 +31,24 @@ pub enum AppExitAction {
     Cancelled,
 }
 
+#[derive(Debug, Clone)]
+enum ActiveModal {
+    None,
+    Inspector(InspectorState),
+    ConfirmSecrets { active_secret_files: usize },
+}
+
 /// Pure UI state holding the directory tree, cached metrics, cursor, and modal modes.
 #[derive(Debug, Clone)]
 pub struct TuiAppState {
-    tree: DirectoryTree,
+    pub(super) tree: DirectoryTree,
     metrics: TreeMetrics,
-    visible_rows: Vec<VisibleRow>,
-    cursor: usize,
-    scroll_offset: usize,
+    pub(super) visible_rows: Vec<VisibleRow>,
+    pub(super) cursor: usize,
+    pub(super) scroll_offset: usize,
     has_git_context: bool,
     include_git_context: bool,
-    mode: UiMode,
+    modal: ActiveModal,
     exit_action: Option<AppExitAction>,
 }
 
@@ -60,7 +66,7 @@ impl TuiAppState {
             scroll_offset: 0,
             has_git_context,
             include_git_context: has_git_context,
-            mode: UiMode::Tree,
+            modal: ActiveModal::None,
             exit_action: None,
         }
     }
@@ -123,7 +129,18 @@ impl TuiAppState {
     /// Returns the current UI mode (main tree or active modal).
     #[must_use]
     pub const fn mode(&self) -> UiMode {
-        self.mode
+        match &self.modal {
+            ActiveModal::None => UiMode::Tree,
+            ActiveModal::Inspector(ins) => UiMode::Inspector {
+                category: ins.category(),
+                scroll: ins.scroll(),
+            },
+            ActiveModal::ConfirmSecrets {
+                active_secret_files,
+            } => UiMode::ConfirmSecrets {
+                active_secret_files: *active_secret_files,
+            },
+        }
     }
 
     /// Returns the exit decision once the user confirms or cancels.
@@ -138,86 +155,10 @@ impl TuiAppState {
         self.tree.inspector_items(category)
     }
 
-    /// Moves the tree cursor up by one row.
-    pub fn move_up(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    /// Moves the tree cursor down by one row.
-    pub fn move_down(&mut self) {
-        if let Some(max_idx) = self.visible_rows.len().checked_sub(1) {
-            self.cursor = (self.cursor + 1).min(max_idx);
-        }
-    }
-
-    /// Moves the tree cursor up by `step` rows.
-    pub fn page_up(&mut self, step: usize) {
-        self.cursor = self.cursor.saturating_sub(step);
-    }
-
-    /// Moves the tree cursor down by `step` rows.
-    pub fn page_down(&mut self, step: usize) {
-        if let Some(max_idx) = self.visible_rows.len().checked_sub(1) {
-            self.cursor = self.cursor.saturating_add(step).min(max_idx);
-        }
-    }
-
-    /// Keeps `scroll_offset` aligned so `cursor` stays inside `viewport_height`.
-    pub fn ensure_cursor_visible(&mut self, viewport_height: usize) {
-        if viewport_height == 0 {
-            return;
-        }
-        if self.cursor < self.scroll_offset {
-            self.scroll_offset = self.cursor;
-        } else if self.cursor >= self.scroll_offset + viewport_height {
-            self.scroll_offset = self.cursor + 1 - viewport_height;
-        }
-    }
-
-    /// Toggles fold/unfold on the directory under the cursor.
-    pub fn toggle_expand_at_cursor(&mut self) {
-        if let Some(row) = self.visible_rows.get(self.cursor)
-            && self.tree.toggle_expand(row.node_id)
-        {
-            self.refresh_visible_rows();
-        }
-    }
-
-    /// Expands a collapsed directory under the cursor, or steps into its first child.
-    pub fn expand_or_enter_at_cursor(&mut self) {
-        let Some(row) = self.visible_rows.get(self.cursor).copied() else {
-            return;
-        };
-        if let Some(node) = self.tree.get(row.node_id)
-            && let NodeKind::Directory(dir) = &node.kind
-        {
-            if !dir.is_expanded {
-                self.tree.toggle_expand(row.node_id);
-                self.refresh_visible_rows();
-            } else if !dir.children.is_empty() {
-                self.move_down();
-            }
-        }
-    }
-
-    /// Collapses an expanded directory under the cursor, or jumps cursor to its parent folder.
-    pub fn collapse_or_jump_parent(&mut self) {
-        let Some(row) = self.visible_rows.get(self.cursor).copied() else {
-            return;
-        };
-        let Some(node) = self.tree.get(row.node_id) else {
-            return;
-        };
-        if let NodeKind::Directory(dir) = &node.kind
-            && dir.is_expanded
-            && row.node_id != DirectoryTree::ROOT
-        {
-            self.tree.toggle_expand(row.node_id);
-            self.refresh_visible_rows();
-            return;
-        }
-        if let Some(parent_id) = node.parent {
-            self.jump_to_node(parent_id);
+    pub(crate) const fn active_inspector(&self) -> Option<&InspectorState> {
+        match &self.modal {
+            ActiveModal::Inspector(ins) => Some(ins),
+            ActiveModal::None | ActiveModal::ConfirmSecrets { .. } => None,
         }
     }
 
@@ -250,39 +191,26 @@ impl TuiAppState {
 
     /// Opens the Discarded or Unread category inspector overlay.
     pub fn open_inspector(&mut self, category: InspectorCategory) {
-        self.mode = UiMode::Inspector {
-            category,
-            scroll: 0,
-        };
+        self.modal = ActiveModal::Inspector(InspectorState::new(&self.tree, category));
     }
 
     /// Scrolls the active inspector modal list by `delta` rows (`isize`).
     pub fn scroll_inspector(&mut self, delta: isize) {
-        if let UiMode::Inspector { category, scroll } = self.mode {
-            let total = self.tree.inspector_items(category).len();
-            let max_scroll = total.saturating_sub(1);
-            let next = if delta.is_negative() {
-                scroll.saturating_sub(delta.unsigned_abs())
-            } else {
-                scroll.saturating_add(delta.cast_unsigned()).min(max_scroll)
-            };
-            self.mode = UiMode::Inspector {
-                category,
-                scroll: next,
-            };
+        if let ActiveModal::Inspector(ins) = &mut self.modal {
+            ins.scroll_by(delta);
         }
     }
 
     /// Returns from any modal dialog back to the main tree view.
     pub fn close_modal(&mut self) {
-        self.mode = UiMode::Tree;
+        self.modal = ActiveModal::None;
     }
 
     /// Initiates clipboard copy, gating on a confirmation modal if selected files carry secrets.
     pub fn request_copy(&mut self) {
         let active_secrets = self.metrics.counts.active_secret_files;
         if active_secrets > 0 {
-            self.mode = UiMode::ConfirmSecrets {
+            self.modal = ActiveModal::ConfirmSecrets {
                 active_secret_files: active_secrets,
             };
         } else {
@@ -300,28 +228,7 @@ impl TuiAppState {
         self.exit_action = Some(AppExitAction::Cancelled);
     }
 
-    fn jump_to_node(&mut self, target: NodeId) {
-        if let Some(pos) = self
-            .visible_rows
-            .iter()
-            .position(|row| row.node_id == target)
-        {
-            self.cursor = pos;
-        }
-    }
-
     fn refresh_metrics(&mut self) {
         self.metrics = self.tree.compute_metrics();
-    }
-
-    fn refresh_visible_rows(&mut self) {
-        self.visible_rows = self.tree.visible_rows();
-        if let Some(max_idx) = self.visible_rows.len().checked_sub(1) {
-            self.cursor = self.cursor.min(max_idx);
-            self.scroll_offset = self.scroll_offset.min(self.cursor);
-        } else {
-            self.cursor = 0;
-            self.scroll_offset = 0;
-        }
     }
 }

@@ -297,3 +297,60 @@ fn tui_secret_warnings_git_toggle_and_confirmation_modal() {
     press_key(&mut guarded, KeyCode::Char('y'));
     assert_eq!(guarded.exit_action(), Some(AppExitAction::CopyToClipboard));
 }
+
+#[test]
+fn tui_responsive_layout_pins_badges_on_narrow_terminals_and_scrolls() {
+    let mut tree = DirectoryTree::new("monorepo");
+    let mut parent = DirectoryTree::ROOT;
+    for level in ["apps", "web", "src", "features", "billing", "adapters"] {
+        parent = tree.add_dir(parent, level, true).expect("nested dir");
+    }
+    tree.add_text_file(
+        parent,
+        "extremely_long_enterprise_controller_café_🚀.tsx",
+        TextFileData {
+            byte_len: 1_200,
+            tokens: 420,
+            secret_hits: 1,
+            state: TextFileState::new(NaturalSelection::Excluded(NaturalExclusion::GitIgnore)),
+        },
+    )
+    .expect("long nested file");
+
+    for idx in 0..16 {
+        tree.add_text_file(
+            DirectoryTree::ROOT,
+            format!("item_{idx:02}.rs"),
+            TextFileData {
+                byte_len: 200,
+                tokens: 50,
+                secret_hits: usize::from(idx == 0),
+                state: TextFileState::new(NaturalSelection::Included),
+            },
+        )
+        .expect("extra item");
+    }
+
+    let mut state = TuiAppState::new(tree, true);
+    let mut terminal = Terminal::new(TestBackend::new(76, 18)).expect("narrow terminal");
+
+    draw_screen(&mut terminal, &mut state);
+    let screen = buffer_to_string(&terminal);
+
+    // Header alerts, git status, and right-pinned file badges stay visible at 76 columns.
+    assert!(screen.contains("! Secrets: 1"));
+    assert!(screen.contains("Git: ON"));
+    assert!(screen.contains("g Git"));
+    assert!(screen.contains("Esc Quit"));
+    assert!(screen.contains("… (420) [.gitignore] [!]"));
+    assert!(screen.contains("├─") || screen.contains("└─"));
+    assert!(screen.contains('█'));
+
+    // Scrolloff keeps upcoming rows visible when moving near bottom of viewport.
+    for _ in 0..10 {
+        press_key(&mut state, KeyCode::Down);
+        draw_screen(&mut terminal, &mut state);
+    }
+    assert!(state.scroll_offset() > 0);
+    assert!(state.cursor() < state.visible_rows().len());
+}

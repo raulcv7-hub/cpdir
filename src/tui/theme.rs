@@ -61,7 +61,21 @@ pub const fn node_label_style(tier: WeightTier, kind: NodeVisualKind) -> Style {
 /// Returns the highlight style applied to the active cursor row without erasing foreground hues.
 #[must_use]
 pub const fn cursor_row_style() -> Style {
-    Style::new().bg(Color::Rgb(40, 46, 62))
+    Style::new().bg(Color::Rgb(42, 52, 74))
+}
+
+/// Returns a high-contrast accent style for the active row cursor glyph (`▶`).
+#[must_use]
+pub const fn cursor_glyph_style() -> Style {
+    Style::new()
+        .fg(Color::Rgb(110, 210, 255))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Returns the muted guide-line style used for tree hierarchy branches.
+#[must_use]
+pub const fn tree_guide_style() -> Style {
+    Style::new().fg(Color::Rgb(75, 82, 98))
 }
 
 /// Returns the bright warning style for `[!]` secret indicators.
@@ -88,6 +102,25 @@ pub const fn total_tokens_style(selected_tokens: usize) -> Style {
             .fg(Color::Rgb(85, 220, 125))
             .add_modifier(Modifier::BOLD)
     }
+}
+
+/// Formats a compact ASCII progress bar and integer percentage against `target_tokens`.
+#[must_use]
+pub fn format_token_gauge(
+    selected_tokens: usize,
+    target_tokens: usize,
+    bar_width: usize,
+) -> String {
+    if target_tokens == 0 {
+        return "0%".to_owned();
+    }
+    let pct = selected_tokens.saturating_mul(100) / target_tokens;
+    if bar_width == 0 {
+        return format!("{pct}%");
+    }
+    let filled = (selected_tokens.saturating_mul(bar_width) / target_tokens).min(bar_width);
+    let empty = bar_width - filled;
+    format!("[{}{}] {pct}%", "█".repeat(filled), "░".repeat(empty))
 }
 
 /// Formats token counts compactly using integer math (e.g. `420`, `12.4k`, `1.2M`).

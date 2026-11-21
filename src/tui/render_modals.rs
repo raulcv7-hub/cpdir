@@ -1,5 +1,7 @@
 //! Modal overlays for the Discarded/Unread category inspector and secret confirmation dialog.
 
+use std::borrow::Cow;
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -8,7 +10,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::domain::metrics::InspectorReason;
 use crate::domain::{
-    FileDiscardReason, InspectorCategory, NodeKind, PrunedDirReason, UnselectedReason,
+    FileDiscardReason, InspectorCategory, InspectorItem, NodeKind, PrunedDirReason,
+    UnselectedReason,
 };
 use crate::tui::app_state::{TuiAppState, UiMode};
 use crate::tui::theme::{format_token_count, sanitize_tui_label, secret_marker_style};
@@ -40,7 +43,10 @@ fn render_inspector_modal(
     let popup = centered_percent_rect(84, 78, area);
     frame.render_widget(Clear, popup);
 
-    let items = state.inspector_items(category);
+    let items: Cow<'_, [InspectorItem]> = match state.active_inspector() {
+        Some(ins) if ins.category() == category => Cow::Borrowed(ins.items()),
+        _ => Cow::Owned(state.inspector_items(category)),
+    };
     let total = items.len();
     let label = match category {
         InspectorCategory::Discarded => "Discarded",

@@ -1,25 +1,26 @@
-//! Main tree viewport, live category counters, and dynamic key-legend rendering.
+//! Responsive tree viewport, live category counters, scrollbar, and adaptive key legend.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
-
-use crate::domain::{
-    FileDiscardReason, FolderSelectionState, NodeKind, UnselectedReason, VisibleRow, WeightTier,
+use ratatui::widgets::{
+    Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
+
 use crate::tui::app_state::TuiAppState;
+use crate::tui::render_row::build_tree_row_line;
 use crate::tui::theme::{
-    GEMINI_TOKEN_TARGET, NodeVisualKind, cursor_row_style, format_token_count, node_label_style,
-    sanitize_tui_label, secret_marker_style, total_tokens_style,
+    GEMINI_TOKEN_TARGET, format_token_count, format_token_gauge, sanitize_tui_label,
+    secret_marker_style, total_tokens_style,
 };
 
-/// Renders the header summary, scrollable directory tree, and key-binding legend.
+/// Renders the responsive header summary, scrollable tree, and adaptive key-binding legend.
 pub fn render_tree_view(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) {
+    let header_height = if area.height >= 12 { 4 } else { 3 };
     let chunks = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(5),
+        Constraint::Length(header_height),
+        Constraint::Min(3),
         Constraint::Length(3),
     ])
     .split(area);
@@ -31,57 +32,44 @@ pub fn render_tree_view(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppSta
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
     let counts = state.metrics().counts;
+    let inner_w = usize::from(area.width.saturating_sub(2));
     let total_str = format_token_count(counts.selected_tokens);
     let target_str = format_token_count(GEMINI_TOKEN_TARGET);
+    let bar_w = if inner_w >= 74 { 10 } else { 0 };
+    let gauge = format_token_gauge(counts.selected_tokens, GEMINI_TOKEN_TARGET, bar_w);
 
-    let mut spans = vec![
+    let mut top_spans = vec![
         Span::raw(" Tokens: "),
         Span::styled(
-            format!("{total_str} / {target_str}"),
+            format!("{total_str} / {target_str} {gauge}"),
             total_tokens_style(counts.selected_tokens),
-        ),
-        Span::raw("  |  "),
-        Span::styled(
-            format!("Read: {}", counts.read_files),
-            Style::new().fg(Color::Rgb(85, 220, 125)),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            format!("Unread: {}", counts.unread_files),
-            Style::new().fg(Color::Rgb(245, 210, 75)),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            format!("Discarded: {}", counts.discarded_items),
-            Style::new().fg(Color::Rgb(140, 145, 155)),
         ),
     ];
 
+    if area.height < 4 {
+        top_spans.push(Span::raw(" | "));
+        top_spans.extend(compact_count_spans(counts, inner_w >= 86));
+    }
+
     if counts.active_secret_files > 0 {
-        spans.push(Span::raw("  |  "));
-        spans.push(Span::styled(
+        top_spans.push(Span::raw("  |  "));
+        top_spans.push(Span::styled(
             format!("! Secrets: {}", counts.active_secret_files),
             secret_marker_style(),
         ));
     }
-
     if state.has_git_context() {
-        spans.push(Span::raw("  |  "));
-        let (label, style) = if state.include_git_context() {
-            ("Git: ON", Style::new().fg(Color::Rgb(85, 220, 125)))
-        } else {
-            (
-                "Git: OFF",
-                Style::new()
-                    .fg(Color::Rgb(120, 125, 135))
-                    .add_modifier(Modifier::DIM),
-            )
-        };
-        spans.push(Span::styled(label, style));
+        top_spans.push(Span::raw("  |  "));
+        top_spans.push(git_status_span(state.include_git_context()));
+    }
+
+    let mut lines = vec![Line::from(top_spans)];
+    if area.height >= 4 {
+        lines.push(Line::from(compact_count_spans(counts, inner_w >= 38)));
     }
 
     let root_name = sanitize_tui_label(&state.tree().nodes()[0].name);
-    let header = Paragraph::new(Line::from(spans)).block(
+    let header = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
             .title(format!(" cpdir - {root_name} ")),
@@ -91,6 +79,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
 
 fn render_tree_body(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) {
     let viewport_height = usize::from(area.height.saturating_sub(2));
+    let inner_width = usize::from(area.width.saturating_sub(2));
     state.ensure_cursor_visible(viewport_height);
 
     let scroll = state.scroll_offset();
@@ -100,7 +89,9 @@ fn render_tree_body(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) 
     let lines: Vec<Line<'static>> = state.visible_rows()[scroll..end]
         .iter()
         .enumerate()
-        .map(|(offset, &row)| build_tree_row_line(state, row, scroll + offset == state.cursor()))
+        .map(|(offset, &row)| {
+            build_tree_row_line(state, row, scroll + offset == state.cursor(), inner_width)
+        })
         .collect();
 
     let title = if total_rows > viewport_height && viewport_height > 0 {
@@ -112,87 +103,41 @@ fn render_tree_body(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) 
     let tree_widget =
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(tree_widget, area);
-}
 
-fn build_tree_row_line(state: &TuiAppState, row: VisibleRow, is_cursor: bool) -> Line<'static> {
-    let node = &state.tree().nodes()[row.node_id.index()];
-    let rollup = state.metrics().rollups[row.node_id.index()];
-    let mut spans = Vec::new();
-
-    spans.push(Span::raw(if is_cursor { "> " } else { "  " }));
-    if row.depth > 0 {
-        spans.push(Span::raw("  ".repeat(row.depth)));
+    if total_rows > viewport_height && viewport_height > 0 {
+        let max_scroll = total_rows.saturating_sub(viewport_height);
+        let mut sb_state = ScrollbarState::new(max_scroll + 1).position(scroll);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .thumb_style(Style::new().fg(Color::Rgb(110, 210, 255)));
+        frame.render_stateful_widget(
+            scrollbar,
+            area.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut sb_state,
+        );
     }
-
-    let clean_name = sanitize_tui_label(&node.name);
-    match &node.kind {
-        NodeKind::Directory(dir) => {
-            let fold = if dir.is_expanded { "▾ " } else { "▸ " };
-            let checkbox = match rollup.folder_selection {
-                FolderSelectionState::AllSelected => "[x] ",
-                FolderSelectionState::Partial => "[-] ",
-                FolderSelectionState::NoneSelected => "[ ] ",
-                FolderSelectionState::NoTextFiles => "[·] ",
-            };
-            let active = rollup.selected_files > 0;
-            let tier = rollup.display_weight_tier(active);
-            let style = node_label_style(tier, NodeVisualKind::Directory { active });
-
-            let weight_text = format_dir_weight(rollup.selected_tokens, rollup.total_tokens);
-            spans.push(Span::styled(
-                format!("{fold}{checkbox}{clean_name}/{weight_text}"),
-                style,
-            ));
-            if rollup.has_any_secret {
-                spans.push(secret_span(rollup.has_active_secret));
-            }
-        }
-        NodeKind::TextFile(file) => {
-            let active = file.state.is_selected();
-            let checkbox = if active { "[x] " } else { "[ ] " };
-            let tier = WeightTier::from_tokens(file.tokens);
-            let style = node_label_style(tier, NodeVisualKind::TextFile { active });
-            let tok_str = format_token_count(file.tokens);
-
-            spans.push(Span::styled(
-                format!("  {checkbox}{clean_name} ({tok_str})"),
-                style,
-            ));
-            if let Some(reason) = file.state.unselected_reason() {
-                spans.push(Span::styled(
-                    format!(" [{}]", unselected_tag(reason)),
-                    Style::new()
-                        .fg(Color::Rgb(110, 115, 125))
-                        .add_modifier(Modifier::DIM),
-                ));
-            }
-            if file.secret_hits > 0 {
-                spans.push(secret_span(active));
-            }
-        }
-        NodeKind::DiscardedFile(reason) => {
-            let tag = discard_tag(*reason);
-            let style = node_label_style(WeightTier::Light, NodeVisualKind::Discarded);
-            spans.push(Span::styled(format!("  [{tag}] {clean_name}"), style));
-        }
-    }
-
-    let mut line = Line::from(spans);
-    if is_cursor {
-        line = line.style(cursor_row_style());
-    }
-    line
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
+    let inner_w = usize::from(area.width.saturating_sub(2));
     let git_hint = if state.has_git_context() {
         " | g Git"
     } else {
         ""
     };
-    let legend = format!(
-        " Enter Copy | Space Toggle | Tab Fold | a All | u None | d Discarded | n Unread{git_hint} | Esc Quit"
-    );
+    let legend = if inner_w >= 100 {
+        format!(
+            " Enter Copy | Space Toggle | Tab Fold | a All | u None | d Discarded | n Unread{git_hint} | Esc Quit"
+        )
+    } else if inner_w >= 72 {
+        format!(" Enter Copy | Space Sel | Tab Fold | a/u | d/n Inspect{git_hint} | Esc Quit")
+    } else {
+        format!(" Enter Copy | Space Sel | Tab | d/n{git_hint} | Esc")
+    };
     let footer = Paragraph::new(Line::from(Span::styled(
         legend,
         Style::new().fg(Color::Rgb(165, 175, 190)),
@@ -201,47 +146,37 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
     frame.render_widget(footer, area);
 }
 
-fn format_dir_weight(selected: usize, total: usize) -> String {
-    if total == 0 {
-        return String::new();
-    }
-    if selected == total {
-        return format!(" ({})", format_token_count(selected));
-    }
-    format!(
-        " ({}/{})",
-        format_token_count(selected),
-        format_token_count(total)
-    )
+fn compact_count_spans(counts: crate::domain::CategoryCounts, verbose: bool) -> Vec<Span<'static>> {
+    let (r_lbl, u_lbl, d_lbl) = if verbose {
+        (" Read:", "  Unread:", "  Discarded:")
+    } else {
+        (" R:", "  U:", "  D:")
+    };
+    vec![
+        Span::styled(
+            format!("{r_lbl} {}", counts.read_files),
+            Style::new().fg(Color::Rgb(85, 220, 125)),
+        ),
+        Span::styled(
+            format!("{u_lbl} {}", counts.unread_files),
+            Style::new().fg(Color::Rgb(245, 210, 75)),
+        ),
+        Span::styled(
+            format!("{d_lbl} {}", counts.discarded_items),
+            Style::new().fg(Color::Rgb(140, 145, 155)),
+        ),
+    ]
 }
 
-fn secret_span(active: bool) -> Span<'static> {
-    if active {
-        Span::styled(" [!]", secret_marker_style())
+fn git_status_span(enabled: bool) -> Span<'static> {
+    if enabled {
+        Span::styled("Git: ON", Style::new().fg(Color::Rgb(85, 220, 125)))
     } else {
         Span::styled(
-            " [!]",
+            "Git: OFF",
             Style::new()
-                .fg(Color::Rgb(150, 75, 95))
+                .fg(Color::Rgb(120, 125, 135))
                 .add_modifier(Modifier::DIM),
         )
-    }
-}
-
-const fn unselected_tag(reason: UnselectedReason) -> &'static str {
-    match reason {
-        UnselectedReason::UserExcluded => "off",
-        UnselectedReason::DotIgnore => ".ignore",
-        UnselectedReason::GitIgnore => ".gitignore",
-        UnselectedReason::ExceedsTokenThreshold => ">50k",
-    }
-}
-
-const fn discard_tag(reason: FileDiscardReason) -> &'static str {
-    match reason {
-        FileDiscardReason::Binary => "BIN",
-        FileDiscardReason::InvalidUtf8 => "UTF8",
-        FileDiscardReason::ExceedsHardCap { .. } => ">5MB",
-        FileDiscardReason::Unreadable => "ERR",
     }
 }
