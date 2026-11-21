@@ -13,10 +13,11 @@ use arboard::Clipboard;
 use common::workspace::{WorkspaceBuilder, mid_stream_corrupt_utf8_bytes, sample_png_bytes};
 use common::xml_validator::{ParsedXmlFile, parse_strict_xml};
 use cpdir::cli::{CliCommand, CliParseError, normalize_explorer_path, parse_cli_args};
-use cpdir::config::defaults::HARD_READ_BYTE_CAP;
+use cpdir::config::defaults::{DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD, HARD_READ_BYTE_CAP};
 use cpdir::domain::{DirectoryTree, NaturalSelection, TextFileData, TextFileState};
 use cpdir::output::{copy_to_clipboard, render_strict_xml};
-use cpdir::scanner::{ReadFileOutcome, read_bounded_utf8};
+use cpdir::scanner::{ReadFileOutcome, ScanConfig, read_bounded_utf8, scan_directory};
+use cpdir::tokens::{TokenCounter, populate_token_counts};
 
 static CLIPBOARD_LOCK: Mutex<()> = Mutex::new(());
 
@@ -95,7 +96,7 @@ fn cli_normalizes_explorer_drive_root_quotes_unc_and_rejects_invalid_args() {
 }
 
 #[test]
-fn compiled_binary_reports_help_version_errors_without_touching_stdout() {
+fn compiled_binary_reports_help_version_and_non_tty_errors_without_touching_stdout() {
     let bin = env!("CARGO_BIN_EXE_cpdir");
 
     let help_out = Command::new(bin).arg("--help").output().expect("run help");
@@ -123,10 +124,19 @@ fn compiled_binary_reports_help_version_errors_without_touching_stdout() {
         .expect("run file target");
     assert!(!file_err.status.success());
     assert_eq!(String::from_utf8_lossy(&file_err.stdout), "");
+
+    // Running interactive TUI over piped stdio fails cleanly without hanging.
+    let non_tty = Command::new(bin)
+        .arg(ws.root())
+        .output()
+        .expect("run non-tty dir target");
+    assert!(!non_tty.status.success());
+    assert_eq!(String::from_utf8_lossy(&non_tty.stdout), "");
+    assert!(String::from_utf8_lossy(&non_tty.stderr).contains("interactive terminal"));
 }
 
 #[test]
-fn compiled_binary_copies_real_workspace_to_clipboard_and_persists_after_exit() {
+fn full_scan_tokenize_xml_pipeline_writes_win32_clipboard_cleanly() {
     let _lock = CLIPBOARD_LOCK
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -144,18 +154,17 @@ fn compiled_binary_copies_real_workspace_to_clipboard_and_persists_after_exit() 
     ws.create_dir("sub_empty");
     ws.populate_files("node_modules/dep", 10, "mod");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cpdir"))
-        .arg(ws.root())
-        .output()
-        .expect("execute compiled cpdir binary");
-
-    assert!(
-        output.status.success(),
-        "cpdir exited with failure: {}",
-        String::from_utf8_lossy(&output.stderr)
+    let mut scan = scan_directory(ws.root(), &ScanConfig::default()).expect("scan");
+    let counter = TokenCounter::o200k().expect("o200k");
+    populate_token_counts(
+        &mut scan.tree,
+        &scan.contents,
+        DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD,
+        counter,
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Copied 3 files"));
+
+    let xml = render_strict_xml(&scan.tree, &scan.contents, None).expect("xml");
+    copy_to_clipboard(&xml).expect("copy to clipboard");
 
     let clipboard_text = read_clipboard_with_retry();
     let parsed = parse_strict_xml(&clipboard_text).expect("clipboard xml must be valid");
