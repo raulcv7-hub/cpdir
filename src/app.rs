@@ -13,6 +13,7 @@ use ratatui::crossterm::terminal::{
 };
 
 use crate::config::defaults::DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD;
+use crate::git::{GitContextConfig, extract_git_context};
 use crate::output::{ClipboardError, ClipboardWriter, XmlWriteError, render_strict_xml};
 use crate::scanner::{ScanConfig, ScanError, scan_directory};
 use crate::state::{MemoryStore, SavedWorkspaceState, normalize_dir_for_hash};
@@ -135,7 +136,8 @@ pub fn run_interactive(
         scan.tree.apply_overrides(&prev.overrides);
     }
 
-    let mut state = TuiAppState::new(scan.tree, false);
+    let git_snapshot = extract_git_context(target_dir, &GitContextConfig::default());
+    let mut state = TuiAppState::new(scan.tree, git_snapshot.is_some());
     if let Some(prev) = saved
         && let Some(git_enabled) = prev.git_context_enabled
     {
@@ -146,11 +148,18 @@ pub fn run_interactive(
 
     match state.exit_action() {
         Some(AppExitAction::CopyToClipboard) => {
-            let include_git = state.has_git_context() && !state.include_git_context();
-            let git_persist = if include_git { Some(false) } else { None };
+            let git_disabled = state.has_git_context() && !state.include_git_context();
+            let git_persist = if git_disabled { Some(false) } else { None };
+            let active_git = if state.include_git_context() {
+                git_snapshot.as_ref()
+            } else {
+                None
+            };
+
             let tree = state.into_tree();
             let counts = tree.compute_metrics().counts;
-            let xml = render_strict_xml(&tree, &scan.contents, None).map_err(AppError::Xml)?;
+            let xml =
+                render_strict_xml(&tree, &scan.contents, active_git).map_err(AppError::Xml)?;
             clipboard.copy_text(&xml).map_err(AppError::Clipboard)?;
 
             let to_save = SavedWorkspaceState::new(

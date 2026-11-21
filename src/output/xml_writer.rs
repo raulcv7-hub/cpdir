@@ -1,43 +1,11 @@
 //! Strict XML 1.0 serialization with control-character sanitization and zero-loss escaping.
 
 use std::collections::HashMap;
-use std::fmt::{self, Write as _};
+use std::fmt;
 use std::hash::BuildHasher;
 
 use crate::domain::{DirectoryTree, NodeId, NodeKind};
-
-/// Single commit summary rendered inside `<git_context>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitCommitEntry {
-    /// Abbreviated commit hash.
-    pub short_hash: String,
-    /// Commit title line.
-    pub subject: String,
-    /// Optional truncated commit body.
-    pub body: Option<String>,
-}
-
-/// File modification frequency entry rendered inside `<hotspots>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitHotspotEntry {
-    /// Forward-slash relative path inside the repository.
-    pub rel_path: String,
-    /// Number of commits touching this file within the sampled history window.
-    pub commits: usize,
-}
-
-/// Optional Git repository context snapshot rendered when enabled (`[g]`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitContextSnapshot {
-    /// Active branch summary (including ahead/behind status when available).
-    pub branch: String,
-    /// Short `git status` lines for the current working tree.
-    pub working_tree_lines: Vec<String>,
-    /// Recent commits ordered newest-first.
-    pub recent_commits: Vec<GitCommitEntry>,
-    /// Most frequently modified files in recent history.
-    pub hotspots: Vec<GitHotspotEntry>,
-}
+use crate::output::git_xml::{GitContextSnapshot, render_git_context};
 
 /// Errors prevented while assembling the final XML document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +63,19 @@ pub fn render_strict_xml<S: BuildHasher>(
     Ok(xml)
 }
 
+pub(crate) fn push_escaped_xml_text(out: &mut String, text: &str) {
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\r' => out.push_str("&#xD;"),
+            _ if is_valid_xml10_char(ch) => out.push(ch),
+            _ => out.push('\u{FFFD}'),
+        }
+    }
+}
+
 fn estimate_output_bytes(tree: &DirectoryTree) -> usize {
     let payload_sum: usize = tree
         .nodes()
@@ -123,57 +104,6 @@ fn render_directory_structure(tree: &DirectoryTree, out: &mut String) {
         }
         out.push('\n');
     }
-}
-
-fn render_git_context(git: &GitContextSnapshot, out: &mut String) {
-    out.push_str("  <git_context>\n");
-    out.push_str("    <branch>");
-    push_escaped_xml_text(out, &git.branch);
-    out.push_str("</branch>\n");
-
-    if git.working_tree_lines.is_empty() {
-        out.push_str("    <working_tree/>\n");
-    } else {
-        out.push_str("    <working_tree>\n");
-        for line in &git.working_tree_lines {
-            out.push_str("      ");
-            push_escaped_xml_text(out, line);
-            out.push('\n');
-        }
-        out.push_str("    </working_tree>\n");
-    }
-
-    let _ = writeln!(
-        out,
-        "    <recent_commits count=\"{}\">",
-        git.recent_commits.len()
-    );
-    for commit in &git.recent_commits {
-        out.push_str("      ");
-        push_escaped_xml_text(out, &commit.short_hash);
-        out.push_str(" | ");
-        push_escaped_xml_text(out, &commit.subject);
-        out.push('\n');
-        if let Some(body) = &commit.body {
-            for body_line in body.lines() {
-                out.push_str("        ");
-                push_escaped_xml_text(out, body_line);
-                out.push('\n');
-            }
-        }
-    }
-    out.push_str("    </recent_commits>\n");
-
-    if !git.hotspots.is_empty() {
-        out.push_str("    <hotspots>\n");
-        for spot in &git.hotspots {
-            out.push_str("      ");
-            push_escaped_xml_text(out, &spot.rel_path);
-            let _ = writeln!(out, " ({} commits)", spot.commits);
-        }
-        out.push_str("    </hotspots>\n");
-    }
-    out.push_str("  </git_context>\n");
 }
 
 fn render_selected_files<S: BuildHasher>(
@@ -211,19 +141,6 @@ fn render_selected_files<S: BuildHasher>(
 fn push_indent(out: &mut String, levels: usize) {
     for _ in 0..levels {
         out.push_str("  ");
-    }
-}
-
-fn push_escaped_xml_text(out: &mut String, text: &str) {
-    for ch in text.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '\r' => out.push_str("&#xD;"),
-            _ if is_valid_xml10_char(ch) => out.push(ch),
-            _ => out.push('\u{FFFD}'),
-        }
     }
 }
 
