@@ -6,13 +6,16 @@ use common::workspace::{WorkspaceBuilder, mid_stream_corrupt_utf8_bytes, sample_
 use common::xml_validator::parse_strict_xml;
 use cpdir::config::defaults::DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD;
 use cpdir::domain::{
-    DirectoryTree, NaturalExclusion, NaturalSelection, TextFileData, TextFileState,
+    DirectoryTree, NaturalExclusion, NaturalSelection, SecretFinding, SecretRuleKind, TextFileData,
+    TextFileState,
 };
 use cpdir::output::render_strict_xml;
 use cpdir::scanner::{ScanConfig, ScanResult, scan_directory};
+use cpdir::security::{SecretScanner, populate_secret_hits};
 use cpdir::tokens::{TokenCounter, populate_token_counts};
 use cpdir::tui::{
-    AppExitAction, TuiAppState, UiMode, handle_key_event, render_active_modal, render_tree_view,
+    AppExitAction, InspectorTab, TuiAppState, UiMode, handle_key_event, render_active_modal,
+    render_tree_view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -92,6 +95,7 @@ fn scan_and_tokenize(ws: &WorkspaceBuilder) -> ScanResult {
         DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD,
         counter,
     );
+    populate_secret_hits(&mut scan.tree, &scan.contents, SecretScanner::global());
     scan
 }
 
@@ -170,20 +174,29 @@ fn tui_tree_workflow_verifies_colors_folding_release_guard_and_final_xml() {
 }
 
 #[test]
-fn tui_inspector_modals_select_all_none_and_bidi_sanitization() {
+fn tui_unified_inspector_tabs_toggle_and_jump_to_collapsed_folder() {
     let ws = WorkspaceBuilder::new();
-    ws.write_text(".gitignore", "*.log\n");
+    ws.write_text(".gitignore", "*.log\nlogs/\n");
     ws.write_text("src/app.rs", "pub fn run() {}\n");
-    ws.write_text("ignored.log", "ignored log\n");
+    ws.write_text("logs/debug.log", "ignored log 1\n");
+    ws.write_text("logs/trace.log", "ignored log 2\n");
     ws.write_bytes("assets/logo.png", &sample_png_bytes());
     ws.write_bytes("broken.rs", &mid_stream_corrupt_utf8_bytes());
     ws.populate_files("node_modules/dep", 5, "dep");
 
     let scan = scan_and_tokenize(&ws);
     let mut state = TuiAppState::new(scan.tree, false);
-    let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("test terminal");
+    let mut terminal = Terminal::new(TestBackend::new(105, 24)).expect("test terminal");
 
+    // Open Discarded directly (`d`), verify items, then switch to Unread (`n`) and Secrets (`Tab`).
     press_key(&mut state, KeyCode::Char('d'));
+    assert_eq!(
+        state.mode(),
+        UiMode::Inspector {
+            tab: InspectorTab::Discarded,
+            scroll: 0
+        }
+    );
     draw_screen(&mut terminal, &mut state);
     let disc_view = buffer_to_string(&terminal);
     assert!(disc_view.contains("Discarded (3)"));
@@ -194,23 +207,55 @@ fn tui_inspector_modals_select_all_none_and_bidi_sanitization() {
     press_key(&mut state, KeyCode::Char('n'));
     draw_screen(&mut terminal, &mut state);
     let unread_view = buffer_to_string(&terminal);
-    assert!(unread_view.contains("Unread (1)"));
-    assert!(unread_view.contains("[.gitignore]"));
+    assert!(unread_view.contains("Unread (2)"));
+    assert!(unread_view.contains("[DIR] logs/ (2 files"));
 
+    // Toggle entire ignored `logs/` folder ON straight from the Unread inspector via Space.
+    press_key(&mut state, KeyCode::Char(' '));
+    assert_eq!(state.metrics().counts.read_files, 4);
+    assert_eq!(state.metrics().counts.unread_files, 0);
+
+    // Move to `logs/trace.log` inside Unread and press Enter -> expands `logs/` and jumps cursor.
+    press_key(&mut state, KeyCode::Down);
+    press_key(&mut state, KeyCode::Down);
+    press_key(&mut state, KeyCode::Enter);
+    assert_eq!(state.mode(), UiMode::Tree);
+    let landed = state.visible_rows()[state.cursor()];
+    assert_eq!(
+        state.tree().nodes()[landed.node_id.index()].rel_path,
+        "logs/trace.log"
+    );
+
+    // `i` opens Unread, `Tab` twice reaches Secrets, `Left` goes back to Discarded.
+    press_key(&mut state, KeyCode::Char('i'));
+    press_key(&mut state, KeyCode::Tab);
+    press_key(&mut state, KeyCode::Tab);
+    assert!(matches!(
+        state.mode(),
+        UiMode::Inspector {
+            tab: InspectorTab::Secrets,
+            ..
+        }
+    ));
+    press_key(&mut state, KeyCode::Left);
+    assert!(matches!(
+        state.mode(),
+        UiMode::Inspector {
+            tab: InspectorTab::Discarded,
+            ..
+        }
+    ));
     press_key(&mut state, KeyCode::Esc);
     assert_eq!(state.mode(), UiMode::Tree);
 
-    // Single `a` key toggles between None and All, and `u` remains a direct alias for None.
-    press_key(&mut state, KeyCode::Char('a'));
-    assert_eq!(state.metrics().counts.read_files, 0);
+    // Single `a` toggles All/None cleanly and sanitizes Bidi/ANSI characters.
     press_key(&mut state, KeyCode::Char('a'));
     assert_eq!(state.metrics().counts.read_files, 2);
-    press_key(&mut state, KeyCode::Char('u'));
+    press_key(&mut state, KeyCode::Char('a'));
     assert_eq!(state.metrics().counts.read_files, 0);
     press_key(&mut state, KeyCode::Char('a'));
     assert_eq!(state.metrics().counts.read_files, 2);
 
-    // Sanitize hostile Bidi/ANSI filename characters before writing cells to terminal.
     let mut bidi_tree = DirectoryTree::new("repo");
     bidi_tree
         .add_text_file(
@@ -233,7 +278,7 @@ fn tui_inspector_modals_select_all_none_and_bidi_sanitization() {
 }
 
 #[test]
-fn tui_secret_warnings_purple_tint_git_tokens_and_confirmation_modal() {
+fn tui_secret_warnings_inspector_tab_git_tokens_and_exclude_action() {
     let mut tree = DirectoryTree::new("sec_repo");
     tree.add_text_file(
         DirectoryTree::ROOT,
@@ -246,17 +291,25 @@ fn tui_secret_warnings_purple_tint_git_tokens_and_confirmation_modal() {
         },
     )
     .expect("main.rs");
-    tree.add_text_file(
-        DirectoryTree::ROOT,
-        ".env",
-        TextFileData {
-            byte_len: 120,
-            tokens: 50,
-            secret_hits: 2,
-            state: TextFileState::new(NaturalSelection::Excluded(NaturalExclusion::GitIgnore)),
-        },
-    )
-    .expect(".env");
+    let env_id = tree
+        .add_text_file(
+            DirectoryTree::ROOT,
+            ".env",
+            TextFileData {
+                byte_len: 120,
+                tokens: 50,
+                secret_hits: 1,
+                state: TextFileState::new(NaturalSelection::Excluded(NaturalExclusion::GitIgnore)),
+            },
+        )
+        .expect(".env");
+    tree.set_secret_findings(
+        env_id,
+        vec![SecretFinding {
+            line: 4,
+            rule: SecretRuleKind::AwsAccessKey,
+        }],
+    );
 
     let mut state = TuiAppState::new(tree.clone(), true);
     state.set_git_context_tokens(1_400);
@@ -281,44 +334,43 @@ fn tui_secret_warnings_purple_tint_git_tokens_and_confirmation_modal() {
     assert!(after_git_off.contains("Tokens: 400"));
     assert!(after_git_off.contains("Git: OFF"));
 
-    // Unselected secret file does not block Enter.
+    // Open Secrets inspector tab directly (`s`), inspect exact line/rule, and toggle `.env` ON.
+    press_key(&mut state, KeyCode::Char('s'));
+    draw_screen(&mut terminal, &mut state);
+    let sec_tab = buffer_to_string(&terminal);
+    assert!(sec_tab.contains("Secrets (1)"));
+    assert!(sec_tab.contains("[AwsAccessKey] .env:4"));
+
+    press_key(&mut state, KeyCode::Char(' '));
+    assert_eq!(state.metrics().counts.active_secret_files, 1);
+    press_key(&mut state, KeyCode::Esc);
+
+    // Pressing Enter now shows line/rule inside ConfirmSecrets; `x` excludes flagged files cleanly.
     press_key(&mut state, KeyCode::Enter);
-    assert_eq!(state.exit_action(), Some(AppExitAction::CopyToClipboard));
-
-    // Selecting `.env` turns it bright purple, activates header warning, and opens ConfirmSecrets.
-    let mut guarded = TuiAppState::new(tree, true);
-    move_cursor_to(&mut guarded, ".env");
-    press_key(&mut guarded, KeyCode::Char(' '));
-    draw_screen(&mut terminal, &mut guarded);
-    assert!(buffer_to_string(&terminal).contains("! Secrets: 1"));
     assert_eq!(
-        find_substring_fg(&terminal, ".env"),
-        Some(Color::Rgb(205, 130, 255))
-    );
-
-    press_key(&mut guarded, KeyCode::Enter);
-    assert_eq!(
-        guarded.mode(),
+        state.mode(),
         UiMode::ConfirmSecrets {
             active_secret_files: 1
         }
     );
-    draw_screen(&mut terminal, &mut guarded);
+    draw_screen(&mut terminal, &mut state);
     let modal = buffer_to_string(&terminal);
-    assert!(modal.contains("Potential Secrets Selected"));
-    assert!(modal.contains("1 selected file(s) contain potential secrets"));
+    assert!(modal.contains("- .env (1 hit(s)) - line 4 [AwsAccessKey]"));
+    assert!(modal.contains("[x] Exclude flagged"));
 
-    press_key(&mut guarded, KeyCode::Char('n'));
-    assert_eq!(guarded.mode(), UiMode::Tree);
-    assert_eq!(guarded.exit_action(), None);
+    press_key(&mut state, KeyCode::Char('x'));
+    assert_eq!(state.mode(), UiMode::Tree);
+    assert_eq!(state.metrics().counts.active_secret_files, 0);
 
-    // Pressing `a` while custom overrides exist restores safe defaults without keeping `.env`.
-    press_key(&mut guarded, KeyCode::Char('a'));
-    assert_eq!(guarded.metrics().counts.read_files, 1);
-    assert_eq!(guarded.metrics().counts.active_secret_files, 0);
-
-    // Re-enable `.env` and confirm copy anyway.
+    // Selecting `.env` on main tree turns it bright purple and still allows `y` confirmation.
+    let mut guarded = TuiAppState::new(tree, true);
+    move_cursor_to(&mut guarded, ".env");
     press_key(&mut guarded, KeyCode::Char(' '));
+    draw_screen(&mut terminal, &mut guarded);
+    assert_eq!(
+        find_substring_fg(&terminal, ".env"),
+        Some(Color::Rgb(205, 130, 255))
+    );
     press_key(&mut guarded, KeyCode::Enter);
     press_key(&mut guarded, KeyCode::Char('y'));
     assert_eq!(guarded.exit_action(), Some(AppExitAction::CopyToClipboard));

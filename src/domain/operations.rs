@@ -21,6 +21,20 @@ impl DirectoryTree {
         false
     }
 
+    /// Expands `id` (if a directory) and all ancestor directories up to root.
+    pub fn expand_ancestors(&mut self, id: NodeId) {
+        let mut curr = Some(id);
+        while let Some(nid) = curr {
+            let Some(node) = self.nodes.get_mut(nid.0) else {
+                break;
+            };
+            if let NodeKind::Directory(dir) = &mut node.kind {
+                dir.is_expanded = true;
+            }
+            curr = node.parent;
+        }
+    }
+
     /// Collapses every subdirectory while keeping the root directory expanded.
     pub fn collapse_all_subdirs(&mut self) {
         for (idx, node) in self.nodes.iter_mut().enumerate() {
@@ -35,6 +49,18 @@ impl DirectoryTree {
         for node in &mut self.nodes {
             if let NodeKind::Directory(dir) = &mut node.kind {
                 dir.is_expanded = true;
+            }
+        }
+    }
+
+    /// Deselects all currently selected files that carry secret findings.
+    pub fn unselect_secret_files(&mut self) {
+        for node in &mut self.nodes {
+            if let NodeKind::TextFile(file) = &mut node.kind
+                && file.secret_hits > 0
+                && file.state.is_selected()
+            {
+                file.state.set_selected(false);
             }
         }
     }

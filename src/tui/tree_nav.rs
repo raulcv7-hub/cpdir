@@ -117,7 +117,7 @@ impl TuiAppState {
         }
     }
 
-    fn jump_to_node(&mut self, target: NodeId) {
+    pub(super) fn jump_to_node(&mut self, target: NodeId) {
         if let Some(pos) = self
             .visible_rows
             .iter()
@@ -127,7 +127,7 @@ impl TuiAppState {
         }
     }
 
-    fn refresh_visible_rows(&mut self) {
+    pub(super) fn refresh_visible_rows(&mut self) {
         self.visible_rows = self.tree.visible_rows();
         if let Some(max_idx) = self.visible_rows.len().checked_sub(1) {
             self.cursor = self.cursor.min(max_idx);

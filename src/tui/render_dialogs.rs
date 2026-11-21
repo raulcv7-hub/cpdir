@@ -6,11 +6,17 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
-use crate::domain::NodeKind;
+use crate::domain::{NodeId, NodeKind};
 use crate::tui::app_state::TuiAppState;
-use crate::tui::theme::{sanitize_tui_label, secret_marker_style};
+use crate::tui::theme::{sanitize_tui_label, secret_marker_style, secret_rule_label};
 
 const MAX_MODAL_SECRET_PATHS: usize = 5;
+
+struct FlaggedSecretRow {
+    rel_path: String,
+    first_finding: Option<(usize, &'static str)>,
+    total_hits: usize,
+}
 
 /// Renders the confirmation prompt shown when selected files contain potential secrets.
 pub(super) fn render_confirm_secrets_modal(
@@ -19,13 +25,23 @@ pub(super) fn render_confirm_secrets_modal(
     state: &TuiAppState,
     active_secret_files: usize,
 ) {
-    let flagged: Vec<(String, usize)> = state
+    let flagged: Vec<FlaggedSecretRow> = state
         .tree()
         .nodes()
         .iter()
-        .filter_map(|n| match &n.kind {
+        .enumerate()
+        .filter_map(|(idx, n)| match &n.kind {
             NodeKind::TextFile(f) if f.secret_hits > 0 && f.state.is_selected() => {
-                Some((sanitize_tui_label(&n.rel_path), f.secret_hits))
+                let first_finding = state
+                    .tree()
+                    .secret_findings(NodeId(idx))
+                    .first()
+                    .map(|finding| (finding.line, secret_rule_label(finding.rule)));
+                Some(FlaggedSecretRow {
+                    rel_path: sanitize_tui_label(&n.rel_path),
+                    first_finding,
+                    total_hits: f.secret_hits,
+                })
             }
             _ => None,
         })
@@ -34,7 +50,7 @@ pub(super) fn render_confirm_secrets_modal(
     let shown = flagged.len().min(MAX_MODAL_SECRET_PATHS);
     let has_more = flagged.len() > MAX_MODAL_SECRET_PATHS;
     let extra_rows = u16::try_from(shown + usize::from(has_more)).unwrap_or(6);
-    let popup = centered_fixed_rect(68, 50, 8 + extra_rows, area);
+    let popup = centered_fixed_rect(76, 58, 8 + extra_rows, area);
     frame.render_widget(Clear, popup);
 
     let mut lines = vec![
@@ -44,9 +60,16 @@ pub(super) fn render_confirm_secrets_modal(
             secret_marker_style(),
         ),
     ];
-    for (rel, hits) in flagged.iter().take(MAX_MODAL_SECRET_PATHS) {
+    for row in flagged.iter().take(MAX_MODAL_SECRET_PATHS) {
+        let detail = match row.first_finding {
+            Some((line, rule)) => format!(
+                "    - {} ({} hit(s)) - line {line} [{rule}]",
+                row.rel_path, row.total_hits
+            ),
+            None => format!("    - {} ({} hit(s))", row.rel_path, row.total_hits),
+        };
         lines.push(Line::styled(
-            format!("    - {rel} ({hits} hit(s))"),
+            detail,
             Style::new().fg(Color::Rgb(245, 210, 75)),
         ));
     }
@@ -55,7 +78,7 @@ pub(super) fn render_confirm_secrets_modal(
         lines.push(Line::raw(format!("    ... (+{rest} more flagged file(s))")));
     }
     lines.push(Line::raw(""));
-    lines.push(confirm_actions_line());
+    lines.push(secret_confirm_actions_line());
 
     let dialog = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
@@ -100,9 +123,9 @@ pub(super) fn render_help_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAp
     frame.render_widget(Clear, popup);
 
     let git_line = if state.has_git_context() {
-        "  g           Toggle <git_context> inclusion"
+        "  g              Toggle <git_context> inclusion"
     } else {
-        "  g           Git context unavailable outside repositories"
+        "  g              Git context unavailable outside repositories"
     };
 
     let lines = vec![
@@ -112,10 +135,10 @@ pub(super) fn render_help_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAp
         Line::raw("  Tab / Left/Right  Fold/unfold folder or jump to parent"),
         Line::raw("  c / e          Collapse all subfolders / Expand all"),
         Line::raw(""),
-        help_row("Selection & Actions", Color::Rgb(85, 220, 125)),
+        help_row("Selection & Inspector", Color::Rgb(85, 220, 125)),
         Line::raw("  Space          Toggle file or subtree recursively"),
         Line::raw("  a              Toggle All (safe defaults) / None"),
-        Line::raw("  d / n          Open Discarded / Unread inspector"),
+        Line::raw("  i / n / d / s  Inspector (Unread / Discarded / Secrets)"),
         Line::raw(git_line),
         Line::raw("  Enter / Esc    Copy strict XML to clipboard / Quit"),
         Line::raw(""),
@@ -141,6 +164,33 @@ pub(super) fn render_help_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAp
             .style(Style::new().bg(Color::Rgb(22, 26, 36))),
     );
     frame.render_widget(dialog, popup);
+}
+
+fn secret_confirm_actions_line() -> Line<'static> {
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "[y/Enter]",
+            Style::new()
+                .fg(Color::Rgb(255, 145, 55))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Copy anyway   "),
+        Span::styled(
+            "[x]",
+            Style::new()
+                .fg(Color::Rgb(205, 130, 255))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Exclude flagged   "),
+        Span::styled(
+            "[n/Esc]",
+            Style::new()
+                .fg(Color::Rgb(85, 220, 125))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Return"),
+    ])
 }
 
 fn confirm_actions_line() -> Line<'static> {

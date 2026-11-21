@@ -1,17 +1,17 @@
 //! Pure TUI state machine driving selection, modals, and exit intents.
 
 use crate::domain::{DirectoryTree, InspectorCategory, InspectorItem, TreeMetrics, VisibleRow};
-use crate::tui::inspector_state::InspectorState;
+use crate::tui::inspector_state::{InspectorState, InspectorTab};
 
 /// Active view layer controlling key handling and modal overlays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiMode {
     /// Primary interactive directory tree view.
     Tree,
-    /// Scrollable inspector listing either Discarded or Unread entries.
+    /// Unified tabbed inspector listing Unread, Discarded, or Secrets entries.
     Inspector {
-        /// Category currently displayed.
-        category: InspectorCategory,
+        /// Active tab currently displayed inside the inspector.
+        tab: InspectorTab,
         /// Top visible row offset inside the modal list.
         scroll: usize,
     },
@@ -36,7 +36,7 @@ pub enum AppExitAction {
 }
 
 #[derive(Debug, Clone)]
-enum ActiveModal {
+pub(super) enum ActiveModal {
     None,
     Inspector(InspectorState),
     Help,
@@ -55,7 +55,7 @@ pub struct TuiAppState {
     has_git_context: bool,
     include_git_context: bool,
     git_context_tokens: usize,
-    modal: ActiveModal,
+    pub(super) modal: ActiveModal,
     exit_action: Option<AppExitAction>,
 }
 
@@ -164,7 +164,7 @@ impl TuiAppState {
         match &self.modal {
             ActiveModal::None => UiMode::Tree,
             ActiveModal::Inspector(ins) => UiMode::Inspector {
-                category: ins.category(),
+                tab: ins.tab(),
                 scroll: ins.scroll(),
             },
             ActiveModal::Help => UiMode::Help,
@@ -187,16 +187,6 @@ impl TuiAppState {
     #[must_use]
     pub fn inspector_items(&self, category: InspectorCategory) -> Vec<InspectorItem> {
         self.tree.inspector_items(category)
-    }
-
-    pub(crate) const fn active_inspector(&self) -> Option<&InspectorState> {
-        match &self.modal {
-            ActiveModal::Inspector(ins) => Some(ins),
-            ActiveModal::None
-            | ActiveModal::Help
-            | ActiveModal::ConfirmEmptyCopy
-            | ActiveModal::ConfirmSecrets { .. } => None,
-        }
     }
 
     /// Toggles selection for the file or subtree under the cursor.
@@ -228,16 +218,18 @@ impl TuiAppState {
         self.refresh_metrics();
     }
 
+    /// Deselects all currently selected files carrying secret findings and returns to tree.
+    pub fn exclude_active_secret_files(&mut self) {
+        self.tree.unselect_secret_files();
+        self.refresh_metrics();
+        self.modal = ActiveModal::None;
+    }
+
     /// Toggles inclusion of `<git_context>` when inside a Git repository.
     pub fn toggle_git_context(&mut self) {
         if self.has_git_context {
             self.include_git_context = !self.include_git_context;
         }
-    }
-
-    /// Opens the Discarded or Unread category inspector overlay.
-    pub fn open_inspector(&mut self, category: InspectorCategory) {
-        self.modal = ActiveModal::Inspector(InspectorState::new(&self.tree, category));
     }
 
     /// Toggles the `?` quick-reference help modal overlay.
@@ -246,13 +238,6 @@ impl TuiAppState {
             ActiveModal::Help => ActiveModal::None,
             _ => ActiveModal::Help,
         };
-    }
-
-    /// Scrolls the active inspector modal list by `delta` rows (`isize`).
-    pub fn scroll_inspector(&mut self, delta: isize) {
-        if let ActiveModal::Inspector(ins) = &mut self.modal {
-            ins.scroll_by(delta);
-        }
     }
 
     /// Returns from any modal dialog back to the main tree view.
@@ -289,7 +274,7 @@ impl TuiAppState {
         self.exit_action = Some(AppExitAction::Cancelled);
     }
 
-    fn refresh_metrics(&mut self) {
+    pub(super) fn refresh_metrics(&mut self) {
         self.metrics = self.tree.compute_metrics();
     }
 }

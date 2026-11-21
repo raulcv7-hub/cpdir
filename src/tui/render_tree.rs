@@ -166,8 +166,14 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
     spans.push(Span::raw(if wide { "  " } else { " " }));
     push_key_hint(
         &mut spans,
-        "[d/n]",
-        if wide { " Inspect" } else { "" },
+        "[i]",
+        if wide {
+            " Inspect"
+        } else if medium {
+            " Insp"
+        } else {
+            ""
+        },
         Color::Rgb(140, 185, 255),
     );
     if state.has_git_context() {

@@ -2,7 +2,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::domain::WeightTier;
+use crate::domain::{SecretRuleKind, WeightTier};
 
 /// Typed visual category preventing boolean parameter confusion when styling tree rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,6 +106,23 @@ pub const fn total_tokens_style() -> Style {
     Style::new()
         .fg(Color::Rgb(110, 210, 255))
         .add_modifier(Modifier::BOLD)
+}
+
+/// Returns a concise display label for a matched [`SecretRuleKind`].
+#[must_use]
+pub const fn secret_rule_label(rule: SecretRuleKind) -> &'static str {
+    match rule {
+        SecretRuleKind::PrivateKey => "PrivateKey",
+        SecretRuleKind::AwsAccessKey => "AwsAccessKey",
+        SecretRuleKind::GitHubToken => "GitHubToken",
+        SecretRuleKind::GoogleApiKey => "GoogleApiKey",
+        SecretRuleKind::SlackToken => "SlackToken",
+        SecretRuleKind::StripeLiveKey => "StripeLiveKey",
+        SecretRuleKind::AiProviderKey => "AiProviderKey",
+        SecretRuleKind::CredentialUrl => "CredentialUrl",
+        SecretRuleKind::JwtToken => "JwtToken",
+        SecretRuleKind::HardcodedSecret => "HardcodedSecret",
+    }
 }
 
 /// Formats token counts compactly using integer math (e.g. `420`, `12.4k`, `1.2M`).
