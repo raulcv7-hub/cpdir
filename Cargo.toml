@@ -7,6 +7,10 @@ description = "Interactive Windows 11 TUI to inspect a directory tree and copy s
 readme = "README.md"
 publish = false
 
+[dev-dependencies]
+quick-xml = "0.42"
+tempfile = "3.27"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
