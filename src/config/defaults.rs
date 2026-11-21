@@ -97,13 +97,27 @@ pub fn is_known_binary_extension(path: &Path) -> bool {
     matches_any_ignore_case(KNOWN_BINARY_EXTENSIONS, ext)
 }
 
-/// Returns `true` when `rel_path` refers to an exempt template or lockfile basename.
+/// Returns `true` when `rel_path` refers to an exempt template, `.env.*.example`, or lockfile.
 #[must_use]
 pub fn is_secret_scan_exempt_path(rel_path: &str) -> bool {
     let Some(file_name) = Path::new(rel_path).file_name().and_then(|n| n.to_str()) else {
         return false;
     };
-    matches_any_ignore_case(SECRET_EXEMPT_FILENAMES, file_name)
+    if matches_any_ignore_case(SECRET_EXEMPT_FILENAMES, file_name) {
+        return true;
+    }
+
+    let lower = file_name.to_ascii_lowercase();
+    let template_suffixes = [".example", ".sample", ".template", ".dist", ".defaults"];
+    if (lower.starts_with(".env.") || lower.starts_with("env."))
+        && template_suffixes.iter().any(|sfx| lower.ends_with(sfx))
+    {
+        return true;
+    }
+
+    [".example.", ".sample.", ".template."]
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 fn matches_any_ignore_case(candidates: &[&str], value: &str) -> bool {

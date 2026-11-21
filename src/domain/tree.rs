@@ -1,8 +1,9 @@
 //! Arena-backed directory tree data structures enforcing parent-before-child invariants.
 
+use std::collections::HashMap;
 use std::fmt;
 
-use crate::domain::selection::{FileDiscardReason, PrunedDirReason, TextFileState};
+use crate::domain::selection::{FileDiscardReason, PrunedDirReason, SecretFinding, TextFileState};
 
 /// Typed handle referencing a node inside [`DirectoryTree`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -100,6 +101,7 @@ pub struct PrunedDir {
 pub struct DirectoryTree {
     pub(crate) nodes: Vec<TreeNode>,
     pub(crate) pruned_dirs: Vec<PrunedDir>,
+    secret_findings: HashMap<NodeId, Vec<SecretFinding>>,
 }
 
 impl DirectoryTree {
@@ -122,6 +124,7 @@ impl DirectoryTree {
         Self {
             nodes: vec![root],
             pruned_dirs: Vec::new(),
+            secret_findings: HashMap::new(),
         }
     }
 
@@ -154,6 +157,26 @@ impl DirectoryTree {
             rel_path: rel_path.into(),
             reason,
         });
+    }
+
+    /// Stores detailed secret findings for text node `id` and synchronizes its hit count.
+    pub fn set_secret_findings(&mut self, id: NodeId, findings: Vec<SecretFinding>) {
+        if let Some(node) = self.nodes.get_mut(id.0)
+            && let NodeKind::TextFile(file) = &mut node.kind
+        {
+            file.secret_hits = findings.len();
+            if findings.is_empty() {
+                self.secret_findings.remove(&id);
+            } else {
+                self.secret_findings.insert(id, findings);
+            }
+        }
+    }
+
+    /// Returns detailed secret findings recorded for `id`, or an empty slice if none exist.
+    #[must_use]
+    pub fn secret_findings(&self, id: NodeId) -> &[SecretFinding] {
+        self.secret_findings.get(&id).map_or(&[], Vec::as_slice)
     }
 
     /// Appends a child subdirectory under `parent` and returns its [`NodeId`].

@@ -10,41 +10,9 @@ use regex::{Regex, RegexSet};
 use crate::config::defaults::is_secret_scan_exempt_path;
 use crate::domain::{DirectoryTree, NodeId, NodeKind};
 
+pub use crate::domain::{SecretFinding, SecretRuleKind};
+
 const PARALLEL_SCAN_MIN_FILES: usize = 8;
-
-/// Category of potential secret matched by [`SecretScanner`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SecretRuleKind {
-    /// PEM private key block header.
-    PrivateKey,
-    /// AWS IAM access key identifier.
-    AwsAccessKey,
-    /// GitHub personal or fine-grained access token.
-    GitHubToken,
-    /// Google API key (`AIza...`).
-    GoogleApiKey,
-    /// Slack bot, user, or app token.
-    SlackToken,
-    /// Stripe live secret or restricted key.
-    StripeLiveKey,
-    /// `OpenAI` or Anthropic provider API key.
-    AiProviderKey,
-    /// Connection string or URL carrying embedded password credentials.
-    CredentialUrl,
-    /// JSON web token (`eyJ...`).
-    JwtToken,
-    /// Quoted or `ENV=` hardcoded secret/password assignment.
-    HardcodedSecret,
-}
-
-/// Single secret alert recorded without capturing the raw secret value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SecretFinding {
-    /// One-based line number where the match occurred.
-    pub line: usize,
-    /// Classification of the matched credential pattern.
-    pub rule: SecretRuleKind,
-}
 
 #[derive(Debug)]
 struct CompiledRule {
@@ -184,7 +152,7 @@ impl SecretScanner {
     }
 }
 
-/// Scans all readable text files in `tree` and stores `secret_hits` counts per file.
+/// Scans all readable text files in `tree` and stores finding counts and details per file.
 pub fn populate_secret_hits<S: BuildHasher>(
     tree: &mut DirectoryTree,
     contents: &HashMap<NodeId, String, S>,
@@ -206,22 +174,19 @@ pub fn populate_secret_hits<S: BuildHasher>(
         })
         .collect();
 
-    let hits: Vec<(NodeId, usize)> = if work.len() < PARALLEL_SCAN_MIN_FILES {
-        work.into_iter()
-            .map(|(id, path, text)| (id, scanner.scan_text(path, text).len()))
-            .collect()
-    } else {
-        work.par_iter()
-            .map(|&(id, path, text)| (id, scanner.scan_text(path, text).len()))
-            .collect()
-    };
+    let findings_per_node: Vec<(NodeId, Vec<SecretFinding>)> =
+        if work.len() < PARALLEL_SCAN_MIN_FILES {
+            work.into_iter()
+                .map(|(id, path, text)| (id, scanner.scan_text(path, text)))
+                .collect()
+        } else {
+            work.par_iter()
+                .map(|&(id, path, text)| (id, scanner.scan_text(path, text)))
+                .collect()
+        };
 
-    for (id, count) in hits {
-        if let Some(node) = tree.get_mut(id)
-            && let NodeKind::TextFile(file) = &mut node.kind
-        {
-            file.secret_hits = count;
-        }
+    for (id, findings) in findings_per_node {
+        tree.set_secret_findings(id, findings);
     }
 }
 
@@ -244,11 +209,59 @@ fn is_placeholder_value(val: &str) -> bool {
         || trimmed.starts_with('<')
         || trimmed.starts_with("{{")
         || trimmed.starts_with('[')
+        || trimmed.contains("${")
+        || trimmed.contains("{{")
+        || (trimmed.contains('<') && trimmed.contains('>'))
     {
         return true;
     }
 
     let lower = trimmed.to_ascii_lowercase();
+    let exact_labels = [
+        "password",
+        "passwort",
+        "contraseña",
+        "api_key",
+        "api key",
+        "api-key",
+        "api token",
+        "x-api-key",
+        "secret",
+        "secret_key",
+        "secret key",
+        "access_token",
+        "access token",
+        "auth_token",
+        "auth token",
+        "client_secret",
+        "client secret",
+        "private_key",
+        "private key",
+        "db_password",
+        "passphrase",
+        "bearer token",
+    ];
+    if exact_labels.contains(&lower.as_str()) {
+        return true;
+    }
+
+    let ui_prefixes = [
+        "enter ",
+        "input ",
+        "type your ",
+        "invalid ",
+        "missing ",
+        "required ",
+        "forgot ",
+        "reset ",
+        "confirm ",
+        "please ",
+        "provide ",
+    ];
+    if ui_prefixes.iter().any(|pfx| lower.starts_with(pfx)) {
+        return true;
+    }
+
     let placeholder_tokens = [
         "example",
         "changeme",

@@ -15,7 +15,7 @@ pub use metrics::{
 pub use operations::VisibleRow;
 pub use selection::{
     FileDiscardReason, FolderSelectionState, NaturalExclusion, NaturalSelection, PrunedDirReason,
-    TextFileState, UnselectedReason,
+    SecretFinding, SecretRuleKind, TextFileState, UnselectedReason,
 };
 pub use tree::{
     DirectoryData, DirectoryTree, NodeId, NodeKind, PrunedDir, TextFileData, TreeError, TreeNode,
