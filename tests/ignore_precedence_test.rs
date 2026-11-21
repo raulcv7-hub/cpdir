@@ -4,6 +4,7 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::path::Path;
 use std::process::Command;
 
 use common::workspace::{WorkspaceBuilder, mid_stream_corrupt_utf8_bytes, sample_png_bytes};
@@ -11,6 +12,7 @@ use common::xml_validator::{ParsedXmlFile, parse_strict_xml};
 use cpdir::domain::metrics::InspectorReason;
 use cpdir::domain::{InspectorCategory, NodeKind, PrunedDirReason, UnselectedReason};
 use cpdir::output::render_strict_xml;
+use cpdir::scanner::walker::resolve_root_name;
 use cpdir::scanner::{ScanConfig, ScanError, scan_directory};
 
 fn build_precedence_workspace() -> WorkspaceBuilder {
@@ -146,6 +148,31 @@ fn golden_multilevel_ignore_precedence_pruning_and_xml_emission() {
         path: "logs/sub/rescue.log".to_owned(),
         content: "rescued by nested logs/.ignore!\n".to_owned(),
     }));
+}
+
+#[test]
+fn preserves_source_nested_build_and_vendor_while_pruning_package_outputs() {
+    let ws = WorkspaceBuilder::new();
+    ws.write_text("src/build/gen.rs", "pub fn gen() {}\n");
+    ws.write_text("internal/vendor/helper.go", "package vendor\n");
+    ws.populate_files("apps/web/dist", 15, "bundle");
+    ws.populate_files("infra/.terraform/providers", 10, "tf");
+
+    let scan = scan_directory(ws.root(), &ScanConfig::default()).expect("scan");
+    let xml = render_strict_xml(&scan.tree, &scan.contents, None).expect("xml");
+    let parsed = parse_strict_xml(&xml).expect("valid xml");
+
+    let emitted: Vec<String> = parsed.files.into_iter().map(|f| f.path).collect();
+    assert_eq!(
+        emitted,
+        vec!["internal/vendor/helper.go", "src/build/gen.rs"]
+    );
+    assert!(!xml.contains("apps/web/dist"));
+    assert!(!xml.contains("infra/.terraform"));
+
+    if cfg!(windows) {
+        assert_eq!(resolve_root_name(Path::new(r"C:\")), "C:");
+    }
 }
 
 #[test]

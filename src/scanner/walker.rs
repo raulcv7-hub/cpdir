@@ -4,9 +4,9 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
-use crate::config::defaults::{HARD_READ_BYTE_CAP, is_pruned_dir_name};
+use crate::config::defaults::{HARD_READ_BYTE_CAP, should_prune_dir};
 use crate::domain::{
     DirectoryTree, NodeId, PrunedDirReason, TextFileData, TextFileState, TreeError,
 };
@@ -156,6 +156,21 @@ pub fn scan_directory(root: &Path, config: &ScanConfig) -> Result<ScanResult, Sc
     Ok(ScanResult { tree, contents })
 }
 
+/// Resolves a concise display label for a scanned root directory, including Windows drive roots.
+#[must_use]
+pub fn resolve_root_name(root: &Path) -> String {
+    let resolved = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if let Some(name) = resolved.file_name().or_else(|| root.file_name()) {
+        let text = name.to_string_lossy();
+        if !text.is_empty() {
+            return text.into_owned();
+        }
+    }
+    extract_root_label(&resolved)
+        .or_else(|| extract_root_label(root))
+        .unwrap_or_else(|| "workspace".to_owned())
+}
+
 fn process_directory(
     parent_id: NodeId,
     abs_dir: &Path,
@@ -181,7 +196,7 @@ fn process_directory(
         };
 
         if entry.is_dir {
-            if is_pruned_dir_name(&entry.name) {
+            if should_prune_dir(&child_rel, &entry.name) {
                 tree.record_pruned_dir(child_rel, PrunedDirReason::DependencyOrVcs);
                 continue;
             }
@@ -261,10 +276,19 @@ fn read_sorted_entries(dir: &Path) -> Result<Vec<SortedEntry>, ScanError> {
     Ok(entries)
 }
 
-fn resolve_root_name(root: &Path) -> String {
-    root.canonicalize()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .or_else(|| root.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "workspace".to_owned())
+fn extract_root_label(path: &Path) -> Option<String> {
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return None;
+    };
+    match prefix.kind() {
+        Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+            Some(format!("{}:", char::from(letter)))
+        }
+        Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => Some(format!(
+            "\\\\{}\\{}",
+            server.to_string_lossy(),
+            share.to_string_lossy()
+        )),
+        Prefix::DeviceNS(dev) | Prefix::Verbatim(dev) => Some(dev.to_string_lossy().into_owned()),
+    }
 }

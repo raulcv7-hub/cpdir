@@ -2,14 +2,17 @@
 
 mod common;
 
+use std::path::Path;
+
 use common::workspace::{
     WorkspaceBuilder, mid_stream_corrupt_utf8_bytes, sample_png_bytes, utf16_le_with_bom_bytes,
 };
-use cpdir::config::defaults::{HARD_READ_BYTE_CAP, is_known_binary_extension, is_pruned_dir_name};
+use cpdir::config::defaults::{
+    HARD_READ_BYTE_CAP, is_known_binary_extension, is_pruned_dir_name, should_prune_dir,
+};
 use cpdir::domain::FileDiscardReason;
 use cpdir::scanner::{ReadFileOutcome, read_bounded_utf8};
 use proptest::prelude::*;
-use std::path::Path;
 
 #[test]
 fn reads_utf8_boms_crlf_cjk_ansi_logs_and_empty_files() {
@@ -197,6 +200,14 @@ fn defaults_pruning_and_binary_extension_tables_preserve_safe_folders() {
     for dir_name in ["bin", "src", "tests", ".vscode", ".github", "assets"] {
         assert!(!is_pruned_dir_name(dir_name), "must keep {dir_name}");
     }
+    assert!(should_prune_dir("apps/web/dist", "dist"));
+    assert!(should_prune_dir("services/api/build", "build"));
+    assert!(should_prune_dir("infra/.terraform", ".terraform"));
+    assert!(should_prune_dir("src/.git", ".git"));
+    assert!(!should_prune_dir("src/build", "build"));
+    assert!(!should_prune_dir("internal/vendor", "vendor"));
+    assert!(!should_prune_dir("lib/dist", "dist"));
+
     assert!(is_known_binary_extension(Path::new("nested/FILE.DLL")));
     assert!(!is_known_binary_extension(Path::new("nested/icon.SVG")));
     assert!(!is_known_binary_extension(Path::new("Cargo.lock")));

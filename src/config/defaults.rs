@@ -8,14 +8,11 @@ pub const DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD: usize = 50_000;
 /// Hard file size ceiling (`5 MiB`) preventing OOM or stalls on giant dumps and blobs.
 pub const HARD_READ_BYTE_CAP: u64 = 5 * 1024 * 1024;
 
-/// Directory names pruned completely before populating the TUI tree or XML output.
-pub const PRUNED_DIR_NAMES: &[&str] = &[
+/// Directory names pruned unconditionally at any depth (VCS, caches, and package dependencies).
+pub const UNCONDITIONAL_PRUNED_DIR_NAMES: &[&str] = &[
     ".git",
     "node_modules",
     "target",
-    "dist",
-    "build",
-    "vendor",
     "__pycache__",
     ".venv",
     "venv",
@@ -27,12 +24,22 @@ pub const PRUNED_DIR_NAMES: &[&str] = &[
     ".svelte-kit",
     ".turbo",
     ".parcel-cache",
+    ".angular",
+    ".expo",
     ".gradle",
     ".idea",
     ".vs",
-    "coverage",
-    "obj",
+    ".terraform",
+    ".dart_tool",
+    ".tox",
+    ".nox",
 ];
+
+/// Directory names pruned when outside explicit source-code subtrees (`src/`, `lib/`, etc.).
+pub const CONTEXT_PRUNED_DIR_NAMES: &[&str] =
+    &["build", "dist", "vendor", "obj", "coverage", "out"];
+
+const SOURCE_ANCESTOR_DIRS: &[&str] = &["src", "source", "sources", "lib", "internal", "cmd"];
 
 /// Lowercase file extensions immediately classified as non-textual binaries.
 pub const KNOWN_BINARY_EXTENSIONS: &[&str] = &[
@@ -62,12 +69,23 @@ pub const SECRET_EXEMPT_FILENAMES: &[&str] = &[
     "poetry.lock",
 ];
 
-/// Returns `true` when `dir_name` matches a dependency, build, or VCS folder to prune.
+/// Returns `true` when `dir_name` matches a known dependency, build, cache, or VCS folder.
 #[must_use]
 pub fn is_pruned_dir_name(dir_name: &str) -> bool {
-    PRUNED_DIR_NAMES
-        .iter()
-        .any(|candidate| dir_name.eq_ignore_ascii_case(candidate))
+    matches_any_ignore_case(UNCONDITIONAL_PRUNED_DIR_NAMES, dir_name)
+        || matches_any_ignore_case(CONTEXT_PRUNED_DIR_NAMES, dir_name)
+}
+
+/// Decides whether a directory at `rel_path` should be pruned before tree ingestion.
+///
+/// Unconditional VCS/cache/dependency directories prune at every depth, whereas ambiguous output
+/// names (`build`, `dist`, `vendor`, `obj`, `coverage`, `out`) remain intact inside source trees.
+#[must_use]
+pub fn should_prune_dir(rel_path: &str, dir_name: &str) -> bool {
+    if matches_any_ignore_case(UNCONDITIONAL_PRUNED_DIR_NAMES, dir_name) {
+        return true;
+    }
+    matches_any_ignore_case(CONTEXT_PRUNED_DIR_NAMES, dir_name) && !has_source_ancestor(rel_path)
 }
 
 /// Returns `true` when `path` ends with a known binary file extension.
@@ -76,9 +94,7 @@ pub fn is_known_binary_extension(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
-    KNOWN_BINARY_EXTENSIONS
-        .iter()
-        .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+    matches_any_ignore_case(KNOWN_BINARY_EXTENSIONS, ext)
 }
 
 /// Returns `true` when `rel_path` refers to an exempt template or lockfile basename.
@@ -87,7 +103,20 @@ pub fn is_secret_scan_exempt_path(rel_path: &str) -> bool {
     let Some(file_name) = Path::new(rel_path).file_name().and_then(|n| n.to_str()) else {
         return false;
     };
-    SECRET_EXEMPT_FILENAMES
+    matches_any_ignore_case(SECRET_EXEMPT_FILENAMES, file_name)
+}
+
+fn matches_any_ignore_case(candidates: &[&str], value: &str) -> bool {
+    candidates
         .iter()
-        .any(|candidate| file_name.eq_ignore_ascii_case(candidate))
+        .any(|candidate| value.eq_ignore_ascii_case(candidate))
+}
+
+fn has_source_ancestor(rel_path: &str) -> bool {
+    let Some((parent, _)) = rel_path.rsplit_once('/') else {
+        return false;
+    };
+    parent
+        .split('/')
+        .any(|segment| matches_any_ignore_case(SOURCE_ANCESTOR_DIRS, segment))
 }
