@@ -12,7 +12,9 @@ use common::git_repo::GitRepoHarness;
 use common::workspace::WorkspaceBuilder;
 use common::xml_validator::parse_strict_xml;
 use cpdir::domain::DirectoryTree;
-use cpdir::git::{GitContextConfig, extract_git_context};
+use cpdir::git::{
+    GitAvailability, GitContextConfig, extract_git_context, extract_git_context_status,
+};
 use cpdir::output::render_strict_xml;
 use cpdir::scanner::{ScanConfig, scan_directory};
 use cpdir::tui::TuiAppState;
@@ -115,8 +117,8 @@ fn handles_non_git_directories_and_unborn_repositories_gracefully() {
     let non_git = WorkspaceBuilder::new();
     non_git.write_text("hello.rs", "fn hi() {}\n");
     assert_eq!(
-        extract_git_context(non_git.root(), &GitContextConfig::default()),
-        None
+        extract_git_context_status(non_git.root(), &GitContextConfig::default()),
+        GitAvailability::NotARepository
     );
 
     let unborn = WorkspaceBuilder::new();
@@ -135,6 +137,82 @@ fn handles_non_git_directories_and_unborn_repositories_gracefully() {
     let xml = render_strict_xml(&DirectoryTree::new("unborn"), &empty_contents, Some(&ctx))
         .expect("xml renders unborn repo");
     assert!(parse_strict_xml(&xml).expect("valid xml").has_git_context);
+}
+
+#[test]
+fn monorepo_subdirectory_scopes_status_commits_hotspots_and_detached_head() {
+    let ws = WorkspaceBuilder::new();
+    ws.write_text("packages/web/app.ts", "export const web = 1;\n");
+    ws.write_text("packages/api/main.rs", "fn main() {}\n");
+    ws.write_text(
+        "packages/api/old_name.rs",
+        "pub fn a() {}\npub fn b() {}\npub fn c() {}\npub fn d() {}\n",
+    );
+    ws.write_text("packages/api/café guide.rs", "pub fn guide() {}\n");
+
+    let git = GitRepoHarness::init(ws.root());
+    git.commit_all("chore: initial monorepo", None);
+
+    ws.write_text("packages/web/app.ts", "export const web = 2;\n");
+    git.commit_all("feat(web): web-only commit", None);
+
+    ws.write_text("packages/api/main.rs", "fn main() { println!(\"v2\"); }\n");
+    git.commit_all("feat(api): api update", None);
+
+    // Stage a rename inside `packages/api/` and dirty both packages.
+    let api_dir = ws.root().join("packages/api");
+    fs::rename(api_dir.join("old_name.rs"), api_dir.join("new_name.rs")).expect("rename");
+    git.run_git(&["add", "-A"]);
+    ws.write_text("packages/web/dirty_web.ts", "export const dirty = true;\n");
+    ws.write_text("packages/api/dirty_api.txt", "pending api note\n");
+
+    let GitAvailability::Available(ctx) =
+        extract_git_context_status(&api_dir, &GitContextConfig::default())
+    else {
+        panic!("expected git context for monorepo subdirectory");
+    };
+
+    assert!(
+        ctx.working_tree_lines
+            .iter()
+            .any(|l| l == "R  old_name.rs -> new_name.rs"),
+        "expected relative rename line, got {:?}",
+        ctx.working_tree_lines
+    );
+    assert!(
+        ctx.working_tree_lines
+            .iter()
+            .any(|l| l == "?? dirty_api.txt")
+    );
+    assert!(
+        ctx.working_tree_lines
+            .iter()
+            .all(|l| !l.contains("packages/web") && !l.contains("packages/api/"))
+    );
+
+    let subjects: Vec<&str> = ctx
+        .recent_commits
+        .iter()
+        .map(|c| c.subject.as_str())
+        .collect();
+    assert_eq!(
+        subjects,
+        vec!["feat(api): api update", "chore: initial monorepo"]
+    );
+
+    let hotspot_paths: Vec<&str> = ctx.hotspots.iter().map(|h| h.rel_path.as_str()).collect();
+    assert!(hotspot_paths.contains(&"main.rs"));
+    assert!(hotspot_paths.contains(&"café guide.rs"));
+    assert!(
+        hotspot_paths
+            .iter()
+            .all(|p| !p.contains("packages/web") && !p.starts_with("packages/api/"))
+    );
+
+    git.run_git(&["checkout", "--detach", "HEAD"]);
+    let detached = extract_git_context(&api_dir, &GitContextConfig::default())
+        .expect("detached head still extracts context");
+    assert!(detached.branch.contains("HEAD"));
 }
 
 #[test]

@@ -1,0 +1,157 @@
+//! Pure parsers transforming Git CLI stdout payloads into structured `<git_context>` entries.
+
+use std::collections::HashMap;
+
+use crate::output::{GitCommitEntry, GitHotspotEntry, GitTagEntry};
+
+/// Parses `git status --porcelain=v1 -b` output into `(branch, working_tree_lines)`.
+#[must_use]
+pub(crate) fn parse_branch_and_status(
+    raw: &str,
+    prefix: &str,
+    max_lines: usize,
+) -> (String, Vec<String>) {
+    let mut lines = raw.lines();
+    let branch = lines
+        .next()
+        .map_or_else(|| "unknown".to_owned(), parse_branch_header);
+
+    let mut working_tree_lines = Vec::new();
+    let mut overflow = 0usize;
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        if working_tree_lines.len() < max_lines {
+            working_tree_lines.push(normalize_porcelain_line(line, prefix));
+        } else {
+            overflow += 1;
+        }
+    }
+    if overflow > 0 {
+        working_tree_lines.push(format!("... (+{overflow} more)"));
+    }
+
+    (branch, working_tree_lines)
+}
+
+/// Parses NUL-delimited `git log` records into truncated [`GitCommitEntry`] items.
+#[must_use]
+pub(crate) fn parse_recent_commits(raw: &str, max_body_chars: usize) -> Vec<GitCommitEntry> {
+    let mut commits = Vec::new();
+    for record in raw.split('\0') {
+        let trimmed_rec = record.trim_matches(['\r', '\n']);
+        if trimmed_rec.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed_rec.splitn(3, '\x1f');
+        let Some(short_hash) = parts.next() else {
+            continue;
+        };
+        let subject = parts.next().unwrap_or_default().trim().to_owned();
+        let body = parts
+            .next()
+            .and_then(|raw_body| format_optional_summary(raw_body, max_body_chars));
+
+        commits.push(GitCommitEntry {
+            short_hash: short_hash.trim().to_owned(),
+            subject,
+            body,
+        });
+    }
+    commits
+}
+
+/// Parses NUL-delimited `git for-each-ref` tag records into [`GitTagEntry`] items.
+#[must_use]
+pub(crate) fn parse_recent_tags(raw: &str, max_summary_chars: usize) -> Vec<GitTagEntry> {
+    let mut tags = Vec::new();
+    for record in raw.split('\0') {
+        let trimmed_rec = record.trim_matches(['\r', '\n']);
+        if trimmed_rec.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed_rec.splitn(3, '\x1f');
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        let subject = parts.next().unwrap_or_default().trim();
+        let body = parts.next().unwrap_or_default().trim();
+        let combined = match (subject.is_empty(), body.is_empty()) {
+            (true, true) => None,
+            (false, true) => format_optional_summary(subject, max_summary_chars),
+            (true, false) => format_optional_summary(body, max_summary_chars),
+            (false, false) => {
+                format_optional_summary(&format!("{subject} - {body}"), max_summary_chars)
+            }
+        };
+        tags.push(GitTagEntry {
+            name: name.trim().to_owned(),
+            summary: combined,
+        });
+    }
+    tags
+}
+
+/// Aggregates `git log --name-only` output into sorted file hotspot counts.
+#[must_use]
+pub(crate) fn parse_hotspots(raw: &str, max_hotspots: usize) -> Vec<GitHotspotEntry> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            *counts.entry(trimmed.to_owned()).or_insert(0) += 1;
+        }
+    }
+
+    let mut spots: Vec<GitHotspotEntry> = counts
+        .into_iter()
+        .map(|(rel_path, commits)| GitHotspotEntry { rel_path, commits })
+        .collect();
+    spots.sort_by(|a, b| {
+        b.commits
+            .cmp(&a.commits)
+            .then_with(|| a.rel_path.cmp(&b.rel_path))
+    });
+    spots.truncate(max_hotspots);
+    spots
+}
+
+fn parse_branch_header(line: &str) -> String {
+    let trimmed = line.strip_prefix("## ").unwrap_or(line).trim();
+    if trimmed.is_empty() {
+        "HEAD".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn normalize_porcelain_line(line: &str, prefix: &str) -> String {
+    if prefix.is_empty() {
+        return line.to_owned();
+    }
+    let (Some(status), Some(payload)) = (line.get(..3), line.get(3..)) else {
+        return line.to_owned();
+    };
+    let is_rename_or_copy = matches!(status.as_bytes().first(), Some(b'R' | b'C'));
+    if is_rename_or_copy && let Some((old_path, new_path)) = payload.split_once(" -> ") {
+        let old_rel = old_path.strip_prefix(prefix).unwrap_or(old_path);
+        let new_rel = new_path.strip_prefix(prefix).unwrap_or(new_path);
+        return format!("{status}{old_rel} -> {new_rel}");
+    }
+    let rel = payload.strip_prefix(prefix).unwrap_or(payload);
+    format!("{status}{rel}")
+}
+
+fn format_optional_summary(raw: &str, max_chars: usize) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || max_chars == 0 {
+        return None;
+    }
+    if trimmed.chars().count() <= max_chars {
+        return Some(trimmed.to_owned());
+    }
+    let mut clipped: String = trimmed.chars().take(max_chars).collect();
+    clipped.push_str("...");
+    Some(clipped)
+}
