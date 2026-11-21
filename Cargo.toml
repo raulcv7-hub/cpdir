@@ -7,6 +7,9 @@ description = "Interactive Windows 11 TUI to inspect a directory tree and copy s
 readme = "README.md"
 publish = false
 
+[dependencies]
+arboard = "3.6"
+
 [dev-dependencies]
 proptest = "1.12"
 quick-xml = "0.42"
