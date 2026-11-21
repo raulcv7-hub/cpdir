@@ -1,88 +1,10 @@
 //! State and in-place actions for the unified Unread / Discarded / Secrets inspector modal.
 
-use crate::domain::{
-    DirectoryTree, FileDiscardReason, InspectorCategory, NodeId, NodeKind, PrunedDirReason,
-    SecretRuleKind, TreeMetrics, UnselectedReason,
-};
+use crate::domain::{DirectoryTree, InspectorCategory, MergeSubtreeOutcome, TreeMetrics};
 use crate::tui::app_state::{ActiveModal, TuiAppState};
-
-/// Active tab inside the unified inspector overlay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InspectorTab {
-    /// Readable text files and folders currently unselected.
-    Unread,
-    /// Pruned dependency/VCS directories and discarded binary/corrupt/oversized files.
-    Discarded,
-    /// Files and lines flagged by the local heuristic secret scanner.
-    Secrets,
-}
-
-impl InspectorTab {
-    /// Cycles to the next inspector tab in display order.
-    #[must_use]
-    pub const fn next(self) -> Self {
-        match self {
-            Self::Unread => Self::Discarded,
-            Self::Discarded => Self::Secrets,
-            Self::Secrets => Self::Unread,
-        }
-    }
-
-    /// Cycles to the previous inspector tab in display order.
-    #[must_use]
-    pub const fn prev(self) -> Self {
-        match self {
-            Self::Unread => Self::Secrets,
-            Self::Discarded => Self::Unread,
-            Self::Secrets => Self::Discarded,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum InspectorEntryKind {
-    UnreadDir {
-        node_id: NodeId,
-        unread_count: usize,
-        tokens: usize,
-    },
-    UnreadFile {
-        node_id: NodeId,
-        reason: UnselectedReason,
-        tokens: usize,
-    },
-    DiscardedPrunedDir {
-        reason: PrunedDirReason,
-    },
-    DiscardedFile {
-        node_id: NodeId,
-        reason: FileDiscardReason,
-    },
-    SecretItem {
-        node_id: NodeId,
-        line: Option<usize>,
-        rule: Option<SecretRuleKind>,
-        hits: usize,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InspectorEntry {
-    pub(crate) rel_path: String,
-    pub(crate) kind: InspectorEntryKind,
-}
-
-impl InspectorEntry {
-    pub(crate) const fn node_id(&self) -> Option<NodeId> {
-        match self.kind {
-            InspectorEntryKind::UnreadDir { node_id, .. }
-            | InspectorEntryKind::UnreadFile { node_id, .. }
-            | InspectorEntryKind::DiscardedFile { node_id, .. }
-            | InspectorEntryKind::SecretItem { node_id, .. } => Some(node_id),
-            InspectorEntryKind::DiscardedPrunedDir { .. } => None,
-        }
-    }
-}
+use crate::tui::inspector_items::{
+    InspectorEntry, InspectorEntryKind, InspectorTab, collect_tab_entries,
+};
 
 /// Cached interactive state backing the unified inspector modal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +13,7 @@ pub(crate) struct InspectorState {
     entries: Vec<InspectorEntry>,
     cursor: usize,
     scroll: usize,
+    status_note: Option<String>,
 }
 
 impl InspectorState {
@@ -101,6 +24,7 @@ impl InspectorState {
             entries: collect_tab_entries(tree, metrics, tab),
             cursor: 0,
             scroll: 0,
+            status_note: None,
         }
     }
 
@@ -122,6 +46,25 @@ impl InspectorState {
     #[must_use]
     pub(crate) fn entries(&self) -> &[InspectorEntry] {
         &self.entries
+    }
+
+    #[must_use]
+    pub(crate) fn status_note(&self) -> Option<&str> {
+        self.status_note.as_deref()
+    }
+
+    pub(crate) fn set_status_note(&mut self, note: impl Into<String>) {
+        self.status_note = Some(note.into());
+    }
+
+    pub(crate) fn restore_cursor(&mut self, prev_cursor: usize) {
+        if let Some(max_idx) = self.entries.len().checked_sub(1) {
+            self.cursor = prev_cursor.min(max_idx);
+            self.clamp_scroll(14);
+        } else {
+            self.cursor = 0;
+            self.scroll = 0;
+        }
     }
 
     pub(crate) fn move_cursor(&mut self, delta: isize) {
@@ -215,19 +158,43 @@ impl TuiAppState {
         }
     }
 
-    /// Toggles selection directly for the currently highlighted `Unread` or `Secrets` entry.
+    /// Toggles selection in `Unread`/`Secrets`, or requests re-ingestion for `[PRUNED]` dirs.
     pub fn toggle_inspector_selection(&mut self) {
-        let target = match &self.modal {
-            ActiveModal::Inspector(ins)
-                if matches!(ins.tab(), InspectorTab::Unread | InspectorTab::Secrets) =>
-            {
-                ins.selected_entry().and_then(InspectorEntry::node_id)
-            }
-            _ => None,
+        enum Action {
+            ToggleNode(crate::domain::NodeId),
+            ReingestPruned(String),
+            RejectNonText,
+        }
+
+        let action = match &self.modal {
+            ActiveModal::Inspector(ins) => match ins.selected_entry() {
+                Some(entry) => match &entry.kind {
+                    InspectorEntryKind::UnreadDir { node_id, .. }
+                    | InspectorEntryKind::UnreadFile { node_id, .. }
+                    | InspectorEntryKind::SecretItem { node_id, .. } => {
+                        Action::ToggleNode(*node_id)
+                    }
+                    InspectorEntryKind::DiscardedPrunedDir { .. } => {
+                        Action::ReingestPruned(entry.rel_path.clone())
+                    }
+                    InspectorEntryKind::DiscardedFile { .. } => Action::RejectNonText,
+                },
+                None => return,
+            },
+            _ => return,
         };
-        if let Some(node_id) = target {
-            self.tree.toggle_selection(node_id);
-            self.refresh_metrics();
+
+        match action {
+            Action::ToggleNode(node_id) => {
+                self.tree.toggle_selection(node_id);
+                self.refresh_metrics();
+            }
+            Action::ReingestPruned(rel_path) => {
+                self.pending_reingest = Some(rel_path);
+            }
+            Action::RejectNonText => {
+                self.set_inspector_status("Binary or invalid UTF-8 files cannot enter strict XML.");
+            }
         }
     }
 
@@ -245,107 +212,53 @@ impl TuiAppState {
         }
     }
 
+    /// Returns and clears any pending pruned-directory re-scan request triggered from `Discarded`.
+    pub fn take_pending_reingest(&mut self) -> Option<String> {
+        self.pending_reingest.take()
+    }
+
+    /// Sets an informational status message inside the active inspector modal.
+    pub fn set_inspector_status(&mut self, note: impl Into<String>) {
+        if let ActiveModal::Inspector(ins) = &mut self.modal {
+            ins.set_status_note(note);
+        }
+    }
+
+    /// Merges a re-scanned pruned directory into the tree as collapsed and unselected by default.
+    pub fn apply_reingested_dir(
+        &mut self,
+        rel_path: &str,
+        subtree: DirectoryTree,
+        truncated: bool,
+    ) -> Option<MergeSubtreeOutcome> {
+        let outcome = self.tree.merge_pruned_subtree(rel_path, subtree)?;
+        self.refresh_metrics();
+        self.refresh_visible_rows();
+
+        let note = if truncated {
+            format!("Loaded {rel_path}/ (collapsed, unselected; truncated at entry cap)")
+        } else {
+            format!("Loaded {rel_path}/ (collapsed & unselected)")
+        };
+
+        let next_ins = if let ActiveModal::Inspector(ins) = &self.modal {
+            let mut next = InspectorState::new(&self.tree, self.metrics(), ins.tab());
+            next.restore_cursor(ins.cursor());
+            next.set_status_note(note);
+            Some(next)
+        } else {
+            None
+        };
+        if let Some(next) = next_ins {
+            self.modal = ActiveModal::Inspector(next);
+        }
+        Some(outcome)
+    }
+
     pub(crate) const fn active_inspector(&self) -> Option<&InspectorState> {
         match &self.modal {
             ActiveModal::Inspector(ins) => Some(ins),
             _ => None,
         }
     }
-}
-
-fn collect_tab_entries(
-    tree: &DirectoryTree,
-    metrics: &TreeMetrics,
-    tab: InspectorTab,
-) -> Vec<InspectorEntry> {
-    let mut entries = Vec::new();
-    match tab {
-        InspectorTab::Unread => {
-            for (idx, node) in tree.nodes().iter().enumerate() {
-                match &node.kind {
-                    NodeKind::Directory(_) if idx > 0 => {
-                        let rollup = metrics.rollups[idx];
-                        if rollup.selected_files == 0 && rollup.unread_files > 0 {
-                            entries.push(InspectorEntry {
-                                rel_path: node.rel_path.clone(),
-                                kind: InspectorEntryKind::UnreadDir {
-                                    node_id: NodeId(idx),
-                                    unread_count: rollup.unread_files,
-                                    tokens: rollup.total_tokens,
-                                },
-                            });
-                        }
-                    }
-                    NodeKind::TextFile(file) => {
-                        if let Some(reason) = file.state.unselected_reason() {
-                            entries.push(InspectorEntry {
-                                rel_path: node.rel_path.clone(),
-                                kind: InspectorEntryKind::UnreadFile {
-                                    node_id: NodeId(idx),
-                                    reason,
-                                    tokens: file.tokens,
-                                },
-                            });
-                        }
-                    }
-                    NodeKind::Directory(_) | NodeKind::DiscardedFile(_) => {}
-                }
-            }
-        }
-        InspectorTab::Discarded => {
-            for pruned in tree.pruned_dirs() {
-                entries.push(InspectorEntry {
-                    rel_path: pruned.rel_path.clone(),
-                    kind: InspectorEntryKind::DiscardedPrunedDir {
-                        reason: pruned.reason,
-                    },
-                });
-            }
-            for (idx, node) in tree.nodes().iter().enumerate() {
-                if let NodeKind::DiscardedFile(reason) = node.kind {
-                    entries.push(InspectorEntry {
-                        rel_path: node.rel_path.clone(),
-                        kind: InspectorEntryKind::DiscardedFile {
-                            node_id: NodeId(idx),
-                            reason,
-                        },
-                    });
-                }
-            }
-        }
-        InspectorTab::Secrets => {
-            for (idx, node) in tree.nodes().iter().enumerate() {
-                if let NodeKind::TextFile(file) = &node.kind
-                    && file.secret_hits > 0
-                {
-                    let node_id = NodeId(idx);
-                    let findings = tree.secret_findings(node_id);
-                    if findings.is_empty() {
-                        entries.push(InspectorEntry {
-                            rel_path: node.rel_path.clone(),
-                            kind: InspectorEntryKind::SecretItem {
-                                node_id,
-                                line: None,
-                                rule: None,
-                                hits: file.secret_hits,
-                            },
-                        });
-                    } else {
-                        for finding in findings {
-                            entries.push(InspectorEntry {
-                                rel_path: node.rel_path.clone(),
-                                kind: InspectorEntryKind::SecretItem {
-                                    node_id,
-                                    line: Some(finding.line),
-                                    rule: Some(finding.rule),
-                                    hits: file.secret_hits,
-                                },
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-    entries
 }

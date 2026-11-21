@@ -1,5 +1,6 @@
 //! Imperative application shell orchestrating scan, tokenization, TUI session, and clipboard.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, IsTerminal as _};
 use std::path::Path;
@@ -13,13 +14,15 @@ use ratatui::crossterm::terminal::{
 };
 
 use crate::config::defaults::{DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD, HARD_READ_BYTE_CAP};
+use crate::domain::NodeId;
 use crate::git::{GitContextConfig, extract_git_context};
 use crate::output::{
     ClipboardError, ClipboardWriter, XmlWriteError, render_git_context_xml, render_strict_xml,
 };
 use crate::scanner::{
-    ContentHydrationError, INLINE_CONTENT_CACHE_BYTES, ScanConfig, ScanError, ScanResult,
-    hydrate_selected_contents, release_large_unselected_contents, scan_directory,
+    ContentHydrationError, DEFAULT_RESCAN_MAX_ENTRIES, INLINE_CONTENT_CACHE_BYTES, ScanConfig,
+    ScanError, ScanResult, hydrate_selected_contents, release_large_unselected_contents,
+    rescan_pruned_dir, scan_directory,
 };
 use crate::security::{SecretScanner, populate_secret_hits};
 use crate::state::{MemoryStore, SavedWorkspaceState, normalize_dir_for_hash};
@@ -164,7 +167,7 @@ pub fn run_interactive(
         state.set_include_git_context(git_enabled);
     }
 
-    run_tui_event_loop(&mut state)?;
+    run_tui_event_loop(target_dir, &mut state, &mut scan.contents)?;
 
     match state.exit_action() {
         Some(AppExitAction::CopyToClipboard) => {
@@ -216,7 +219,11 @@ fn scan_and_analyze(target_dir: &Path) -> Result<ScanResult, AppError> {
     Ok(scan)
 }
 
-fn run_tui_event_loop(state: &mut TuiAppState) -> Result<(), AppError> {
+fn run_tui_event_loop(
+    target_dir: &Path,
+    state: &mut TuiAppState,
+    contents: &mut HashMap<NodeId, String>,
+) -> Result<(), AppError> {
     let mut guard = TerminalGuard::enter()?;
     while state.exit_action().is_none() {
         guard
@@ -229,10 +236,55 @@ fn run_tui_event_loop(state: &mut TuiAppState) -> Result<(), AppError> {
             .map_err(|err| AppError::TerminalIo(err.to_string()))?;
 
         match event::read() {
-            Ok(Event::Key(key)) => handle_key_event(state, key),
+            Ok(Event::Key(key)) => {
+                handle_key_event(state, key);
+                handle_pending_reingest(target_dir, state, contents);
+            }
             Ok(_) => {}
             Err(err) => return Err(AppError::TerminalIo(err.to_string())),
         }
     }
     Ok(())
+}
+
+fn handle_pending_reingest(
+    target_dir: &Path,
+    state: &mut TuiAppState,
+    contents: &mut HashMap<NodeId, String>,
+) {
+    let Some(rel_path) = state.take_pending_reingest() else {
+        return;
+    };
+    let mut sub = match rescan_pruned_dir(
+        target_dir,
+        &rel_path,
+        &ScanConfig::default(),
+        DEFAULT_RESCAN_MAX_ENTRIES,
+    ) {
+        Ok(res) => res,
+        Err(err) => {
+            state.set_inspector_status(format!("Failed to load {rel_path}/: {err}"));
+            return;
+        }
+    };
+
+    if let Ok(counter) = TokenCounter::o200k() {
+        populate_token_counts(
+            &mut sub.tree,
+            &sub.contents,
+            DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD,
+            counter,
+        );
+    }
+    populate_secret_hits(&mut sub.tree, &sub.contents, SecretScanner::global());
+
+    if let Some(outcome) = state.apply_reingested_dir(&rel_path, sub.tree, sub.truncated) {
+        for (old_id, new_id) in outcome.id_map {
+            if let Some(text) = sub.contents.remove(&old_id) {
+                contents.insert(new_id, text);
+            }
+        }
+        let _ =
+            release_large_unselected_contents(state.tree(), contents, INLINE_CONTENT_CACHE_BYTES);
+    }
 }

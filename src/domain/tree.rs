@@ -101,7 +101,7 @@ pub struct PrunedDir {
 pub struct DirectoryTree {
     pub(crate) nodes: Vec<TreeNode>,
     pub(crate) pruned_dirs: Vec<PrunedDir>,
-    secret_findings: HashMap<NodeId, Vec<SecretFinding>>,
+    pub(crate) secret_findings: HashMap<NodeId, Vec<SecretFinding>>,
 }
 
 impl DirectoryTree {

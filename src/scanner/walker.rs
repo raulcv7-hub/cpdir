@@ -96,11 +96,11 @@ struct PendingSubdir {
     rel_dir: String,
 }
 
-struct SortedEntry {
-    name: String,
+pub(super) struct SortedEntry {
+    pub(super) name: String,
     lower_name: String,
-    abs_path: PathBuf,
-    is_dir: bool,
+    pub(super) abs_path: PathBuf,
+    pub(super) is_dir: bool,
 }
 
 /// Walks `root` iteratively, pruning dependency/VCS folders and evaluating `.ignore` > `.gitignore`.
@@ -234,7 +234,7 @@ fn process_directory(
     Ok(subdirs)
 }
 
-fn read_sorted_entries(dir: &Path) -> Result<Vec<SortedEntry>, ScanError> {
+pub(super) fn read_sorted_entries(dir: &Path) -> Result<Vec<SortedEntry>, ScanError> {
     let read_dir = fs::read_dir(dir).map_err(|err| ScanError::ReadDirFailed {
         path: dir.to_path_buf(),
         reason: err.to_string(),

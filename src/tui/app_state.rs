@@ -1,7 +1,8 @@
 //! Pure TUI state machine driving selection, modals, and exit intents.
 
 use crate::domain::{DirectoryTree, InspectorCategory, InspectorItem, TreeMetrics, VisibleRow};
-use crate::tui::inspector_state::{InspectorState, InspectorTab};
+use crate::tui::inspector_items::InspectorTab;
+use crate::tui::inspector_state::InspectorState;
 
 /// Active view layer controlling key handling and modal overlays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +56,7 @@ pub struct TuiAppState {
     has_git_context: bool,
     include_git_context: bool,
     git_context_tokens: usize,
+    pub(super) pending_reingest: Option<String>,
     pub(super) modal: ActiveModal,
     exit_action: Option<AppExitAction>,
 }
@@ -74,6 +76,7 @@ impl TuiAppState {
             has_git_context,
             include_git_context: has_git_context,
             git_context_tokens: 0,
+            pending_reingest: None,
             modal: ActiveModal::None,
             exit_action: None,
         }

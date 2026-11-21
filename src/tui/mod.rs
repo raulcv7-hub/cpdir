@@ -2,8 +2,10 @@
 
 pub mod app_state;
 pub mod input;
+mod inspector_items;
 mod inspector_state;
 mod render_dialogs;
+mod render_inspector_row;
 pub mod render_modals;
 mod render_row;
 pub mod render_tree;
@@ -12,7 +14,7 @@ mod tree_nav;
 
 pub use app_state::{AppExitAction, TuiAppState, UiMode};
 pub use input::handle_key_event;
-pub use inspector_state::InspectorTab;
+pub use inspector_items::InspectorTab;
 pub use render_modals::render_active_modal;
 pub use render_tree::render_tree_view;
 pub use theme::{

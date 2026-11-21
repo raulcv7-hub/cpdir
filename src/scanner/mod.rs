@@ -3,6 +3,7 @@
 pub mod content_store;
 pub mod file_reader;
 pub mod ignore_rules;
+pub mod rescan;
 pub mod walker;
 
 pub use content_store::{
@@ -11,4 +12,5 @@ pub use content_store::{
 };
 pub use file_reader::{ReadFileOutcome, read_bounded_utf8};
 pub use ignore_rules::{IgnoreDecision, IgnoreRuleStack};
+pub use rescan::{DEFAULT_RESCAN_MAX_ENTRIES, RescanOutcome, rescan_pruned_dir};
 pub use walker::{ScanConfig, ScanError, ScanResult, scan_directory};

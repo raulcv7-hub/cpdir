@@ -10,7 +10,7 @@ use cpdir::domain::{
     TextFileState,
 };
 use cpdir::output::render_strict_xml;
-use cpdir::scanner::{ScanConfig, ScanResult, scan_directory};
+use cpdir::scanner::{ScanConfig, ScanResult, rescan_pruned_dir, scan_directory};
 use cpdir::security::{SecretScanner, populate_secret_hits};
 use cpdir::tokens::{TokenCounter, populate_token_counts};
 use cpdir::tui::{
@@ -275,6 +275,101 @@ fn tui_unified_inspector_tabs_toggle_and_jump_to_collapsed_folder() {
     assert!(bidi_screen.contains("evil\u{FFFD}gpj.rs\u{FFFD}"));
     assert!(!bidi_screen.contains('\u{202E}'));
     assert!(!bidi_screen.contains('\x1B'));
+}
+
+#[test]
+fn tui_discarded_tab_reingests_pruned_dir_collapsed_and_unselected() {
+    let ws = WorkspaceBuilder::new();
+    ws.write_text("src/main.rs", "fn main() {}\n");
+    ws.write_text("apps/web/src/index.ts", "export const ok = true;\n");
+    ws.write_text("apps/web/dist/bundle.js", "console.log('bundle');\n");
+    ws.write_text("apps/web/dist/nested/style.css", "body { color: red; }\n");
+    ws.populate_files("vendor", 15, "dep");
+
+    let mut scan = scan_and_tokenize(&ws);
+    let mut state = TuiAppState::new(scan.tree, false);
+    let mut terminal = Terminal::new(TestBackend::new(110, 24)).expect("test terminal");
+
+    // Initially `vendor` and `apps/web/dist` are pruned.
+    assert_eq!(state.metrics().counts.read_files, 2);
+    assert_eq!(state.metrics().counts.discarded_items, 2);
+
+    press_key(&mut state, KeyCode::Char('d'));
+    draw_screen(&mut terminal, &mut state);
+    assert!(buffer_to_string(&terminal).contains("apps/web/dist/"));
+
+    // Index 0 is `vendor`; move down to index 1 (`apps/web/dist/`) and Space to load it.
+    press_key(&mut state, KeyCode::Down);
+    press_key(&mut state, KeyCode::Char(' '));
+    let rel = state
+        .take_pending_reingest()
+        .expect("must request pruned dir re-ingest");
+    assert_eq!(rel, "apps/web/dist");
+
+    let mut sub = rescan_pruned_dir(ws.root(), &rel, &ScanConfig::default(), 2_000)
+        .expect("rescan apps/web/dist");
+    let counter = TokenCounter::o200k().expect("o200k");
+    populate_token_counts(
+        &mut sub.tree,
+        &sub.contents,
+        DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD,
+        counter,
+    );
+    populate_secret_hits(&mut sub.tree, &sub.contents, SecretScanner::global());
+
+    let outcome = state
+        .apply_reingested_dir(&rel, sub.tree, sub.truncated)
+        .expect("merge subtree");
+    for (old_id, new_id) in outcome.id_map {
+        if let Some(text) = sub.contents.remove(&old_id) {
+            scan.contents.insert(new_id, text);
+        }
+    }
+
+    draw_screen(&mut terminal, &mut state);
+    let after_load = buffer_to_string(&terminal);
+    assert!(after_load.contains("Loaded apps/web/dist/ (collapsed & unselected)"));
+    assert_eq!(state.metrics().counts.read_files, 2);
+    assert_eq!(state.metrics().counts.unread_files, 2);
+    assert_eq!(state.metrics().counts.discarded_items, 1);
+
+    // Re-ingest remaining `vendor` with tight `max_entries = 5` to verify truncation safety guard.
+    press_key(&mut state, KeyCode::Char(' '));
+    let vendor_rel = state.take_pending_reingest().expect("vendor request");
+    assert_eq!(vendor_rel, "vendor");
+    let vendor_sub = rescan_pruned_dir(ws.root(), &vendor_rel, &ScanConfig::default(), 5)
+        .expect("capped rescan");
+    assert!(vendor_sub.truncated);
+    state.apply_reingested_dir(&vendor_rel, vendor_sub.tree, vendor_sub.truncated);
+    draw_screen(&mut terminal, &mut state);
+    assert!(buffer_to_string(&terminal).contains("truncated at entry cap"));
+
+    // Close modal: `apps/web/dist` appears collapsed (`bundle.js` hidden until expanded).
+    press_key(&mut state, KeyCode::Esc);
+    assert!(
+        state
+            .visible_rows()
+            .iter()
+            .any(|r| state.tree().nodes()[r.node_id.index()].rel_path == "apps/web/dist")
+    );
+    assert!(
+        !state
+            .visible_rows()
+            .iter()
+            .any(|r| state.tree().nodes()[r.node_id.index()].rel_path == "apps/web/dist/bundle.js")
+    );
+
+    // Expand `apps/web/dist`, select `bundle.js`, and verify strict XML emission.
+    move_cursor_to(&mut state, "apps/web/dist");
+    press_key(&mut state, KeyCode::Tab);
+    move_cursor_to(&mut state, "apps/web/dist/bundle.js");
+    press_key(&mut state, KeyCode::Char(' '));
+
+    let xml = render_strict_xml(state.tree(), &scan.contents, None).expect("xml");
+    let parsed = parse_strict_xml(&xml).expect("valid xml");
+    let emitted: Vec<String> = parsed.files.into_iter().map(|f| f.path).collect();
+    assert!(emitted.contains(&"apps/web/dist/bundle.js".to_owned()));
+    assert!(!emitted.contains(&"apps/web/dist/nested/style.css".to_owned()));
 }
 
 #[test]
