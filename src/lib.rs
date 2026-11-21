@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod domain;
+pub mod output;
 pub mod scanner;
 
 /// Returns the package version embedded at compile time.
