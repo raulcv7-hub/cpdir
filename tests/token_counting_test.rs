@@ -3,16 +3,21 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::fs;
 
 use common::workspace::{WorkspaceBuilder, sample_png_bytes};
 use common::xml_validator::parse_strict_xml;
-use cpdir::config::defaults::DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD;
+use cpdir::config::defaults::{DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD, HARD_READ_BYTE_CAP};
 use cpdir::domain::metrics::InspectorReason;
 use cpdir::domain::{
-    DirectoryTree, InspectorCategory, NodeId, NodeKind, UnselectedReason, WeightTier,
+    DirectoryTree, FileDiscardReason, InspectorCategory, NodeId, NodeKind, UnselectedReason,
+    WeightTier,
 };
 use cpdir::output::render_strict_xml;
-use cpdir::scanner::{ScanConfig, scan_directory};
+use cpdir::scanner::{
+    ContentHydrationError, INLINE_CONTENT_CACHE_BYTES, ScanConfig, hydrate_selected_contents,
+    release_large_unselected_contents, scan_directory,
+};
 use cpdir::tokens::{TokenCounter, populate_token_counts};
 
 fn find_node_id(tree: &DirectoryTree, rel_path: &str) -> NodeId {
@@ -161,7 +166,7 @@ fn auto_deselects_real_file_over_50k_tokens_without_overwriting_gitignore() {
                 "data/huge_52k.json".to_owned(),
                 UnselectedReason::ExceedsTokenThreshold,
             ),
-            ("ignored_huge.json".to_owned(), UnselectedReason::GitIgnore,),
+            ("ignored_huge.json".to_owned(), UnselectedReason::GitIgnore),
         ])
     );
 
@@ -212,4 +217,79 @@ fn enforces_exact_threshold_boundary_and_parallel_rayon_batching() {
     assert_eq!(metrics.counts.selected_tokens, expected_total);
     assert_eq!(metrics.rollups[over_id.index()].selected_tokens, 0);
     assert_eq!(metrics.rollups[over_id.index()].total_tokens, over_tokens);
+}
+
+#[test]
+fn releases_large_unselected_buffers_and_hydrates_on_manual_selection() {
+    let ws = WorkspaceBuilder::new();
+    let row = "{\"id\":123,\"name\":\"alpha_beta\",\"active\":true},\n";
+    let huge_payload = row.repeat(3_800);
+    let large_ignored = "ignored line payload\n".repeat(4_000);
+
+    ws.write_text(".gitignore", "logs/\n");
+    ws.write_text("src/main.rs", "fn main() {}\n");
+    ws.write_text("data/huge_52k.json", &huge_payload);
+    ws.write_text("logs/large_ignored.log", &large_ignored);
+
+    let counter = TokenCounter::o200k().expect("o200k");
+    let mut scan = scan_directory(ws.root(), &ScanConfig::default()).expect("scan");
+    populate_token_counts(
+        &mut scan.tree,
+        &scan.contents,
+        DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD,
+        counter,
+    );
+
+    let main_id = find_node_id(&scan.tree, "src/main.rs");
+    let huge_id = find_node_id(&scan.tree, "data/huge_52k.json");
+    let ignored_id = find_node_id(&scan.tree, "logs/large_ignored.log");
+
+    let released = release_large_unselected_contents(
+        &scan.tree,
+        &mut scan.contents,
+        INLINE_CONTENT_CACHE_BYTES,
+    );
+    assert_eq!(released, 2);
+    assert!(scan.contents.contains_key(&main_id));
+    assert!(!scan.contents.contains_key(&huge_id));
+    assert!(!scan.contents.contains_key(&ignored_id));
+
+    // Selecting `data/huge_52k.json` rehydrates it transparently before strict XML emission.
+    scan.tree.toggle_selection(huge_id);
+    hydrate_selected_contents(
+        ws.root(),
+        &scan.tree,
+        &mut scan.contents,
+        HARD_READ_BYTE_CAP,
+    )
+    .expect("rehydrate selected >50k file");
+    assert!(scan.contents.contains_key(&huge_id));
+    assert!(!scan.contents.contains_key(&ignored_id));
+
+    let xml = render_strict_xml(&scan.tree, &scan.contents, None).expect("xml");
+    let parsed = parse_strict_xml(&xml).expect("valid xml");
+    assert!(
+        parsed
+            .files
+            .iter()
+            .any(|f| f.path == "data/huge_52k.json" && f.content == huge_payload)
+    );
+
+    // Deleting a released unselected file on disk surfaces a clean error if later selected.
+    fs::remove_file(ws.root().join("logs/large_ignored.log")).expect("remove log");
+    scan.tree.toggle_selection(ignored_id);
+    let err = hydrate_selected_contents(
+        ws.root(),
+        &scan.tree,
+        &mut scan.contents,
+        HARD_READ_BYTE_CAP,
+    )
+    .expect_err("deleted file must fail hydration cleanly");
+    assert_eq!(
+        err,
+        ContentHydrationError::FileUnavailable {
+            rel_path: "logs/large_ignored.log".to_owned(),
+            reason: FileDiscardReason::Unreadable,
+        }
+    );
 }

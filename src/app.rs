@@ -12,10 +12,13 @@ use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 
-use crate::config::defaults::DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD;
+use crate::config::defaults::{DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD, HARD_READ_BYTE_CAP};
 use crate::git::{GitContextConfig, extract_git_context};
 use crate::output::{ClipboardError, ClipboardWriter, XmlWriteError, render_strict_xml};
-use crate::scanner::{ScanConfig, ScanError, scan_directory};
+use crate::scanner::{
+    ContentHydrationError, INLINE_CONTENT_CACHE_BYTES, ScanConfig, ScanError, ScanResult,
+    hydrate_selected_contents, release_large_unselected_contents, scan_directory,
+};
 use crate::security::{SecretScanner, populate_secret_hits};
 use crate::state::{MemoryStore, SavedWorkspaceState, normalize_dir_for_hash};
 use crate::tokens::{TokenCounter, TokenError, populate_token_counts};
@@ -48,6 +51,8 @@ pub enum AppError {
     Scan(ScanError),
     /// Offline tokenizer initialization failure.
     Tokens(TokenError),
+    /// Selected file could not be reloaded from disk prior to XML emission.
+    ContentHydration(ContentHydrationError),
     /// Terminal I/O or raw-mode failure.
     TerminalIo(String),
     /// Strict XML serialization error.
@@ -62,6 +67,7 @@ impl fmt::Display for AppError {
             Self::NotATerminal => write!(f, "cpdir requires an interactive terminal"),
             Self::Scan(err) => write!(f, "{err}"),
             Self::Tokens(err) => write!(f, "{err}"),
+            Self::ContentHydration(err) => write!(f, "{err}"),
             Self::TerminalIo(reason) => write!(f, "terminal error: {reason}"),
             Self::Xml(err) => write!(f, "{err}"),
             Self::Clipboard(err) => write!(f, "{err}"),
@@ -108,7 +114,7 @@ impl Drop for TerminalGuard {
 /// # Errors
 ///
 /// Returns [`AppError`] if the process lacks a TTY, directory scanning fails, tokenization fails,
-/// terminal rendering fails, or clipboard writing fails.
+/// terminal rendering fails, hydration fails, or clipboard writing fails.
 pub fn run_interactive(
     target_dir: &Path,
     clipboard: &dyn ClipboardWriter,
@@ -122,23 +128,27 @@ pub fn run_interactive(
         return Err(AppError::NotATerminal);
     }
 
-    let mut scan = scan_directory(target_dir, &ScanConfig::default()).map_err(AppError::Scan)?;
-    let counter = TokenCounter::o200k().map_err(AppError::Tokens)?;
-    populate_token_counts(
-        &mut scan.tree,
-        &scan.contents,
-        DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD,
-        counter,
-    );
-    populate_secret_hits(&mut scan.tree, &scan.contents, SecretScanner::global());
+    // Run independent Git CLI subprocesses concurrently with filesystem walk and tokenization.
+    let (scan_res, git_snapshot) = std::thread::scope(|scope| {
+        let git_handle =
+            scope.spawn(|| extract_git_context(target_dir, &GitContextConfig::default()));
+        let scan_res = scan_and_analyze(target_dir);
+        let git_snapshot = git_handle.join().unwrap_or(None);
+        (scan_res, git_snapshot)
+    });
+    let mut scan = scan_res?;
 
     let store = MemoryStore::default_system();
     let saved = store.load_lenient(target_dir);
     if let Some(prev) = &saved {
         scan.tree.apply_overrides(&prev.overrides);
     }
+    let _ = release_large_unselected_contents(
+        &scan.tree,
+        &mut scan.contents,
+        INLINE_CONTENT_CACHE_BYTES,
+    );
 
-    let git_snapshot = extract_git_context(target_dir, &GitContextConfig::default());
     let mut state = TuiAppState::new(scan.tree, git_snapshot.is_some());
     if let Some(prev) = saved
         && let Some(git_enabled) = prev.git_context_enabled
@@ -159,6 +169,8 @@ pub fn run_interactive(
             };
 
             let tree = state.into_tree();
+            hydrate_selected_contents(target_dir, &tree, &mut scan.contents, HARD_READ_BYTE_CAP)
+                .map_err(AppError::ContentHydration)?;
             let counts = tree.compute_metrics().counts;
             let xml =
                 render_strict_xml(&tree, &scan.contents, active_git).map_err(AppError::Xml)?;
@@ -180,6 +192,19 @@ pub fn run_interactive(
         }
         Some(AppExitAction::Cancelled) | None => Ok(RunOutcome::Cancelled),
     }
+}
+
+fn scan_and_analyze(target_dir: &Path) -> Result<ScanResult, AppError> {
+    let mut scan = scan_directory(target_dir, &ScanConfig::default()).map_err(AppError::Scan)?;
+    let counter = TokenCounter::o200k().map_err(AppError::Tokens)?;
+    populate_token_counts(
+        &mut scan.tree,
+        &scan.contents,
+        DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD,
+        counter,
+    );
+    populate_secret_hits(&mut scan.tree, &scan.contents, SecretScanner::global());
+    Ok(scan)
 }
 
 fn run_tui_event_loop(state: &mut TuiAppState) -> Result<(), AppError> {
