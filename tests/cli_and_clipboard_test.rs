@@ -16,6 +16,7 @@ use cpdir::cli::{CliCommand, CliParseError, normalize_explorer_path, parse_cli_a
 use cpdir::config::defaults::{DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD, HARD_READ_BYTE_CAP};
 use cpdir::domain::{DirectoryTree, NaturalSelection, TextFileData, TextFileState};
 use cpdir::output::{copy_to_clipboard, render_strict_xml};
+use cpdir::package_version;
 use cpdir::scanner::{ReadFileOutcome, ScanConfig, read_bounded_utf8, scan_directory};
 use cpdir::tokens::{TokenCounter, populate_token_counts};
 
@@ -107,7 +108,8 @@ fn compiled_binary_reports_help_version_and_non_tty_errors_without_touching_stdo
     let ver_out = Command::new(bin).arg("-V").output().expect("run version");
     assert!(ver_out.status.success());
     assert_eq!(String::from_utf8_lossy(&ver_out.stdout), "");
-    assert!(String::from_utf8_lossy(&ver_out.stderr).contains("cpdir 0.1.0"));
+    let expected_version = format!("cpdir {}", package_version());
+    assert!(String::from_utf8_lossy(&ver_out.stderr).contains(&expected_version));
 
     let bad_flag = Command::new(bin)
         .arg("--invalid-opt")
