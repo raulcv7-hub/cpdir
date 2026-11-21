@@ -1,6 +1,8 @@
 //! Core library crate for `cpdir`.
 
+pub mod config;
 pub mod domain;
+pub mod scanner;
 
 /// Returns the package version embedded at compile time.
 #[must_use]
