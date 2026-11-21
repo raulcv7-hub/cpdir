@@ -114,8 +114,10 @@ fn tui_tree_workflow_verifies_colors_folding_release_guard_and_final_xml() {
 
     draw_screen(&mut terminal, &mut state);
     let initial = buffer_to_string(&terminal);
+    assert!(initial.contains("Tokens:"));
+    assert!(!initial.contains("700.0k"));
     assert!(!initial.contains("Git:"));
-    assert!(!initial.contains("g Git"));
+    assert!(!initial.contains("[g] Git"));
     assert!(initial.contains("Read: 3"));
     assert!(initial.contains("Unread: 2"));
     assert!(initial.contains("Discarded: 2"));
@@ -198,6 +200,11 @@ fn tui_inspector_modals_select_all_none_and_bidi_sanitization() {
     press_key(&mut state, KeyCode::Esc);
     assert_eq!(state.mode(), UiMode::Tree);
 
+    // Single `a` key toggles between None and All, and `u` remains a direct alias for None.
+    press_key(&mut state, KeyCode::Char('a'));
+    assert_eq!(state.metrics().counts.read_files, 0);
+    press_key(&mut state, KeyCode::Char('a'));
+    assert_eq!(state.metrics().counts.read_files, 2);
     press_key(&mut state, KeyCode::Char('u'));
     assert_eq!(state.metrics().counts.read_files, 0);
     press_key(&mut state, KeyCode::Char('a'));
@@ -226,7 +233,7 @@ fn tui_inspector_modals_select_all_none_and_bidi_sanitization() {
 }
 
 #[test]
-fn tui_secret_warnings_git_toggle_and_confirmation_modal() {
+fn tui_secret_warnings_purple_tint_git_tokens_and_confirmation_modal() {
     let mut tree = DirectoryTree::new("sec_repo");
     tree.add_text_file(
         DirectoryTree::ROOT,
@@ -252,30 +259,42 @@ fn tui_secret_warnings_git_toggle_and_confirmation_modal() {
     .expect(".env");
 
     let mut state = TuiAppState::new(tree.clone(), true);
+    state.set_git_context_tokens(1_400);
     let mut terminal = Terminal::new(TestBackend::new(115, 24)).expect("test terminal");
 
     draw_screen(&mut terminal, &mut state);
     let initial = buffer_to_string(&terminal);
-    assert!(initial.contains("Git: ON"));
-    assert!(initial.contains("g Git"));
+    assert!(initial.contains("Tokens: 1.8k"));
+    assert!(initial.contains("Git: ON (+1.4k)"));
+    assert!(initial.contains("[g] Git"));
     assert!(initial.contains("[!]"));
     assert!(!initial.contains("! Secrets:"));
+    assert_eq!(
+        find_substring_fg(&terminal, ".env"),
+        Some(Color::Rgb(115, 72, 145))
+    );
 
     press_key(&mut state, KeyCode::Char('g'));
     draw_screen(&mut terminal, &mut state);
     assert!(!state.include_git_context());
-    assert!(buffer_to_string(&terminal).contains("Git: OFF"));
+    let after_git_off = buffer_to_string(&terminal);
+    assert!(after_git_off.contains("Tokens: 400"));
+    assert!(after_git_off.contains("Git: OFF"));
 
     // Unselected secret file does not block Enter.
     press_key(&mut state, KeyCode::Enter);
     assert_eq!(state.exit_action(), Some(AppExitAction::CopyToClipboard));
 
-    // Selecting `.env` activates header warning and triggers ConfirmSecrets modal on Enter.
+    // Selecting `.env` turns it bright purple, activates header warning, and opens ConfirmSecrets.
     let mut guarded = TuiAppState::new(tree, true);
     move_cursor_to(&mut guarded, ".env");
     press_key(&mut guarded, KeyCode::Char(' '));
     draw_screen(&mut terminal, &mut guarded);
     assert!(buffer_to_string(&terminal).contains("! Secrets: 1"));
+    assert_eq!(
+        find_substring_fg(&terminal, ".env"),
+        Some(Color::Rgb(205, 130, 255))
+    );
 
     press_key(&mut guarded, KeyCode::Enter);
     assert_eq!(
@@ -293,6 +312,13 @@ fn tui_secret_warnings_git_toggle_and_confirmation_modal() {
     assert_eq!(guarded.mode(), UiMode::Tree);
     assert_eq!(guarded.exit_action(), None);
 
+    // Pressing `a` while custom overrides exist restores safe defaults without keeping `.env`.
+    press_key(&mut guarded, KeyCode::Char('a'));
+    assert_eq!(guarded.metrics().counts.read_files, 1);
+    assert_eq!(guarded.metrics().counts.active_secret_files, 0);
+
+    // Re-enable `.env` and confirm copy anyway.
+    press_key(&mut guarded, KeyCode::Char(' '));
     press_key(&mut guarded, KeyCode::Enter);
     press_key(&mut guarded, KeyCode::Char('y'));
     assert_eq!(guarded.exit_action(), Some(AppExitAction::CopyToClipboard));
@@ -340,8 +366,8 @@ fn tui_responsive_layout_pins_badges_on_narrow_terminals_and_scrolls() {
     // Header alerts, git status, and right-pinned file badges stay visible at 76 columns.
     assert!(screen.contains("! Secrets: 1"));
     assert!(screen.contains("Git: ON"));
-    assert!(screen.contains("g Git"));
-    assert!(screen.contains("Esc Quit"));
+    assert!(screen.contains("[g] Git"));
+    assert!(screen.contains("[Esc] Quit"));
     assert!(screen.contains("… (420) [.gitignore] [!]"));
     assert!(screen.contains("├─") || screen.contains("└─"));
     assert!(screen.contains('█'));
@@ -353,4 +379,60 @@ fn tui_responsive_layout_pins_badges_on_narrow_terminals_and_scrolls() {
     }
     assert!(state.scroll_offset() > 0);
     assert!(state.cursor() < state.visible_rows().len());
+}
+
+#[test]
+fn tui_help_modal_collapse_expand_all_and_empty_copy_guard() {
+    let mut tree = DirectoryTree::new("workspace");
+    let sub = tree.add_dir(DirectoryTree::ROOT, "sub", true).expect("sub");
+    tree.add_text_file(
+        sub,
+        "lib.rs",
+        TextFileData {
+            byte_len: 100,
+            tokens: 40,
+            secret_hits: 0,
+            state: TextFileState::new(NaturalSelection::Included),
+        },
+    )
+    .expect("lib.rs");
+
+    let mut state = TuiAppState::new(tree, false);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("test terminal");
+
+    press_key(&mut state, KeyCode::Char('?'));
+    assert_eq!(state.mode(), UiMode::Help);
+    draw_screen(&mut terminal, &mut state);
+    let help = buffer_to_string(&terminal);
+    assert!(help.contains("Help - Press Esc or ? to close"));
+    assert!(help.contains("Secret[!]"));
+
+    press_key(&mut state, KeyCode::Esc);
+    assert_eq!(state.mode(), UiMode::Tree);
+
+    // Collapse all folds `sub`, expand all restores `lib.rs`, Home/End jump to bounds.
+    press_key(&mut state, KeyCode::Char('c'));
+    assert_eq!(state.visible_rows().len(), 2);
+    press_key(&mut state, KeyCode::Char('e'));
+    assert_eq!(state.visible_rows().len(), 3);
+    press_key(&mut state, KeyCode::End);
+    assert_eq!(state.cursor(), 2);
+    press_key(&mut state, KeyCode::Home);
+    assert_eq!(state.cursor(), 0);
+
+    // Deselecting all triggers empty-selection confirmation on Enter.
+    press_key(&mut state, KeyCode::Char('a'));
+    assert_eq!(state.metrics().counts.read_files, 0);
+    press_key(&mut state, KeyCode::Enter);
+    assert_eq!(state.mode(), UiMode::ConfirmEmptyCopy);
+    draw_screen(&mut terminal, &mut state);
+    assert!(buffer_to_string(&terminal).contains("0 files are selected"));
+
+    press_key(&mut state, KeyCode::Char('n'));
+    assert_eq!(state.mode(), UiMode::Tree);
+    assert_eq!(state.exit_action(), None);
+
+    press_key(&mut state, KeyCode::Enter);
+    press_key(&mut state, KeyCode::Char('y'));
+    assert_eq!(state.exit_action(), Some(AppExitAction::CopyToClipboard));
 }

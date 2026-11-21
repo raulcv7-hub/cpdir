@@ -15,6 +15,10 @@ pub enum UiMode {
         /// Top visible row offset inside the modal list.
         scroll: usize,
     },
+    /// Quick-reference keybindings and color-legend modal overlay.
+    Help,
+    /// Confirmation prompt when pressing `Enter` with zero selected files.
+    ConfirmEmptyCopy,
     /// Confirmation prompt displayed on `Enter` when selected files contain potential secrets.
     ConfirmSecrets {
         /// Number of selected files carrying `[!]` warnings.
@@ -35,6 +39,8 @@ pub enum AppExitAction {
 enum ActiveModal {
     None,
     Inspector(InspectorState),
+    Help,
+    ConfirmEmptyCopy,
     ConfirmSecrets { active_secret_files: usize },
 }
 
@@ -48,6 +54,7 @@ pub struct TuiAppState {
     pub(super) scroll_offset: usize,
     has_git_context: bool,
     include_git_context: bool,
+    git_context_tokens: usize,
     modal: ActiveModal,
     exit_action: Option<AppExitAction>,
 }
@@ -66,6 +73,7 @@ impl TuiAppState {
             scroll_offset: 0,
             has_git_context,
             include_git_context: has_git_context,
+            git_context_tokens: 0,
             modal: ActiveModal::None,
             exit_action: None,
         }
@@ -119,6 +127,30 @@ impl TuiAppState {
         self.has_git_context && self.include_git_context
     }
 
+    /// Stores the `o200k_base` token count of `<git_context>` for live header updates.
+    pub const fn set_git_context_tokens(&mut self, tokens: usize) {
+        self.git_context_tokens = tokens;
+    }
+
+    /// Returns the `o200k_base` token count contributed by `<git_context>` when enabled.
+    #[must_use]
+    pub const fn git_context_tokens(&self) -> usize {
+        self.git_context_tokens
+    }
+
+    /// Returns total selected file tokens plus active `<git_context>` tokens.
+    #[must_use]
+    pub const fn total_effective_tokens(&self) -> usize {
+        if self.include_git_context() {
+            self.metrics
+                .counts
+                .selected_tokens
+                .saturating_add(self.git_context_tokens)
+        } else {
+            self.metrics.counts.selected_tokens
+        }
+    }
+
     /// Overrides the initial Git toggle state (e.g., from persisted directory settings).
     pub fn set_include_git_context(&mut self, enabled: bool) {
         if self.has_git_context {
@@ -135,6 +167,8 @@ impl TuiAppState {
                 category: ins.category(),
                 scroll: ins.scroll(),
             },
+            ActiveModal::Help => UiMode::Help,
+            ActiveModal::ConfirmEmptyCopy => UiMode::ConfirmEmptyCopy,
             ActiveModal::ConfirmSecrets {
                 active_secret_files,
             } => UiMode::ConfirmSecrets {
@@ -158,7 +192,10 @@ impl TuiAppState {
     pub(crate) const fn active_inspector(&self) -> Option<&InspectorState> {
         match &self.modal {
             ActiveModal::Inspector(ins) => Some(ins),
-            ActiveModal::None | ActiveModal::ConfirmSecrets { .. } => None,
+            ActiveModal::None
+            | ActiveModal::Help
+            | ActiveModal::ConfirmEmptyCopy
+            | ActiveModal::ConfirmSecrets { .. } => None,
         }
     }
 
@@ -167,6 +204,15 @@ impl TuiAppState {
         if let Some(row) = self.visible_rows.get(self.cursor).copied() {
             self.tree.toggle_selection(row.node_id);
             self.refresh_metrics();
+        }
+    }
+
+    /// Toggles between deselecting all files (when at clean defaults) and restoring safe defaults.
+    pub fn toggle_all_selection(&mut self) {
+        if self.metrics.counts.read_files > 0 && !self.tree.has_user_overrides() {
+            self.unselect_all();
+        } else {
+            self.select_all_default();
         }
     }
 
@@ -194,6 +240,14 @@ impl TuiAppState {
         self.modal = ActiveModal::Inspector(InspectorState::new(&self.tree, category));
     }
 
+    /// Toggles the `?` quick-reference help modal overlay.
+    pub fn toggle_help(&mut self) {
+        self.modal = match self.modal {
+            ActiveModal::Help => ActiveModal::None,
+            _ => ActiveModal::Help,
+        };
+    }
+
     /// Scrolls the active inspector modal list by `delta` rows (`isize`).
     pub fn scroll_inspector(&mut self, delta: isize) {
         if let ActiveModal::Inspector(ins) = &mut self.modal {
@@ -206,12 +260,14 @@ impl TuiAppState {
         self.modal = ActiveModal::None;
     }
 
-    /// Initiates clipboard copy, gating on a confirmation modal if selected files carry secrets.
+    /// Initiates clipboard copy, gating on empty selection or selected secret confirmation.
     pub fn request_copy(&mut self) {
-        let active_secrets = self.metrics.counts.active_secret_files;
-        if active_secrets > 0 {
+        let counts = self.metrics.counts;
+        if counts.read_files == 0 {
+            self.modal = ActiveModal::ConfirmEmptyCopy;
+        } else if counts.active_secret_files > 0 {
             self.modal = ActiveModal::ConfirmSecrets {
-                active_secret_files: active_secrets,
+                active_secret_files: counts.active_secret_files,
             };
         } else {
             self.exit_action = Some(AppExitAction::CopyToClipboard);
@@ -220,6 +276,11 @@ impl TuiAppState {
 
     /// Confirms copying to clipboard even though active secret warnings are present.
     pub fn confirm_copy_with_secrets(&mut self) {
+        self.exit_action = Some(AppExitAction::CopyToClipboard);
+    }
+
+    /// Confirms copying to clipboard from any confirmation modal.
+    pub fn confirm_copy_anyway(&mut self) {
         self.exit_action = Some(AppExitAction::CopyToClipboard);
     }
 

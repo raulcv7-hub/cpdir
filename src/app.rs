@@ -14,7 +14,9 @@ use ratatui::crossterm::terminal::{
 
 use crate::config::defaults::{DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD, HARD_READ_BYTE_CAP};
 use crate::git::{GitContextConfig, extract_git_context};
-use crate::output::{ClipboardError, ClipboardWriter, XmlWriteError, render_strict_xml};
+use crate::output::{
+    ClipboardError, ClipboardWriter, XmlWriteError, render_git_context_xml, render_strict_xml,
+};
 use crate::scanner::{
     ContentHydrationError, INLINE_CONTENT_CACHE_BYTES, ScanConfig, ScanError, ScanResult,
     hydrate_selected_contents, release_large_unselected_contents, scan_directory,
@@ -33,7 +35,7 @@ pub enum RunOutcome {
     Copied {
         /// Number of selected files included in `<files>`.
         files: usize,
-        /// Total selected BPE tokens across included files.
+        /// Total selected BPE tokens across included files and active git context.
         tokens: usize,
         /// Final UTF-8 XML payload size in bytes.
         xml_bytes: usize,
@@ -150,6 +152,12 @@ pub fn run_interactive(
     );
 
     let mut state = TuiAppState::new(scan.tree, git_snapshot.is_some());
+    if let Some(snap) = &git_snapshot
+        && let Ok(counter) = TokenCounter::o200k()
+    {
+        let git_xml = render_git_context_xml(snap);
+        state.set_git_context_tokens(counter.count(&git_xml));
+    }
     if let Some(prev) = saved
         && let Some(git_enabled) = prev.git_context_enabled
     {
@@ -167,6 +175,7 @@ pub fn run_interactive(
             } else {
                 None
             };
+            let total_tokens = state.total_effective_tokens();
 
             let tree = state.into_tree();
             hydrate_selected_contents(target_dir, &tree, &mut scan.contents, HARD_READ_BYTE_CAP)
@@ -186,7 +195,7 @@ pub fn run_interactive(
 
             Ok(RunOutcome::Copied {
                 files: counts.read_files,
-                tokens: counts.selected_tokens,
+                tokens: total_tokens,
                 xml_bytes: xml.len(),
             })
         }

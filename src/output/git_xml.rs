@@ -48,6 +48,14 @@ pub struct GitContextSnapshot {
     pub hotspots: Vec<GitHotspotEntry>,
 }
 
+/// Renders `<git_context>` as a standalone XML fragment for accurate token accounting.
+#[must_use]
+pub fn render_git_context_xml(git: &GitContextSnapshot) -> String {
+    let mut out = String::with_capacity(1_024);
+    render_git_context(git, &mut out);
+    out
+}
+
 pub(crate) fn render_git_context(git: &GitContextSnapshot, out: &mut String) {
     out.push_str("  <git_context>\n");
     out.push_str("    <branch>");

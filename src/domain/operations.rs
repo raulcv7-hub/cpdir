@@ -21,6 +21,34 @@ impl DirectoryTree {
         false
     }
 
+    /// Collapses every subdirectory while keeping the root directory expanded.
+    pub fn collapse_all_subdirs(&mut self) {
+        for (idx, node) in self.nodes.iter_mut().enumerate() {
+            if let NodeKind::Directory(dir) = &mut node.kind {
+                dir.is_expanded = idx == 0;
+            }
+        }
+    }
+
+    /// Expands every directory across the tree.
+    pub fn expand_all_dirs(&mut self) {
+        for node in &mut self.nodes {
+            if let NodeKind::Directory(dir) = &mut node.kind {
+                dir.is_expanded = true;
+            }
+        }
+    }
+
+    /// Returns `true` when any directory or text file carries an explicit user override.
+    #[must_use]
+    pub fn has_user_overrides(&self) -> bool {
+        self.nodes.iter().any(|node| match &node.kind {
+            NodeKind::Directory(dir) => dir.folder_override.is_some(),
+            NodeKind::TextFile(file) => file.state.user_override().is_some(),
+            NodeKind::DiscardedFile(_) => false,
+        })
+    }
+
     /// Toggles selection for a file or recursively for a directory subtree.
     ///
     /// Turning a deselected directory back on restores safe natural defaults (keeping

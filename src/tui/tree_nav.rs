@@ -16,6 +16,18 @@ impl TuiAppState {
         }
     }
 
+    /// Moves the tree cursor to the first visible row.
+    pub const fn move_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// Moves the tree cursor to the last visible row.
+    pub fn move_end(&mut self) {
+        if let Some(max_idx) = self.visible_rows.len().checked_sub(1) {
+            self.cursor = max_idx;
+        }
+    }
+
     /// Moves the tree cursor up by `step` rows.
     pub fn page_up(&mut self, step: usize) {
         self.cursor = self.cursor.saturating_sub(step);
@@ -53,6 +65,18 @@ impl TuiAppState {
         {
             self.refresh_visible_rows();
         }
+    }
+
+    /// Collapses every subdirectory while keeping root expanded.
+    pub fn collapse_all(&mut self) {
+        self.tree.collapse_all_subdirs();
+        self.refresh_visible_rows();
+    }
+
+    /// Expands every directory across the tree.
+    pub fn expand_all(&mut self) {
+        self.tree.expand_all_dirs();
+        self.refresh_visible_rows();
     }
 
     /// Expands a collapsed directory under the cursor, or steps into its first child.

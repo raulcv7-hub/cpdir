@@ -96,7 +96,12 @@ fn prepare_row_parts(state: &TuiAppState, row: VisibleRow, is_cursor: bool) -> R
             let active = file.state.is_selected();
             let checkbox = if active { "[x] " } else { "[ ] " };
             let tier = WeightTier::from_tokens(file.tokens);
-            let style = node_label_style(tier, NodeVisualKind::TextFile { active });
+            let kind = if file.secret_hits > 0 {
+                NodeVisualKind::SecretTextFile { active }
+            } else {
+                NodeVisualKind::TextFile { active }
+            };
+            let style = node_label_style(tier, kind);
             let tok_str = format_token_count(file.tokens);
 
             prefix_spans.push(Span::styled(format!("  {checkbox}"), style));

@@ -1,4 +1,4 @@
-//! Responsive tree viewport, live category counters, scrollbar, and adaptive key legend.
+//! Responsive tree viewport, exact token/git counters, scrollbar, and colorized key legend.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
@@ -11,11 +11,10 @@ use ratatui::widgets::{
 use crate::tui::app_state::TuiAppState;
 use crate::tui::render_row::build_tree_row_line;
 use crate::tui::theme::{
-    GEMINI_TOKEN_TARGET, format_token_count, format_token_gauge, sanitize_tui_label,
-    secret_marker_style, total_tokens_style,
+    format_token_count, sanitize_tui_label, secret_marker_style, total_tokens_style,
 };
 
-/// Renders the responsive header summary, scrollable tree, and adaptive key-binding legend.
+/// Renders the responsive header summary, scrollable tree, and colorized key-binding legend.
 pub fn render_tree_view(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) {
     let header_height = if area.height >= 12 { 4 } else { 3 };
     let chunks = Layout::vertical([
@@ -33,21 +32,15 @@ pub fn render_tree_view(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppSta
 fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
     let counts = state.metrics().counts;
     let inner_w = usize::from(area.width.saturating_sub(2));
-    let total_str = format_token_count(counts.selected_tokens);
-    let target_str = format_token_count(GEMINI_TOKEN_TARGET);
-    let bar_w = if inner_w >= 74 { 10 } else { 0 };
-    let gauge = format_token_gauge(counts.selected_tokens, GEMINI_TOKEN_TARGET, bar_w);
+    let total_str = format_token_count(state.total_effective_tokens());
 
     let mut top_spans = vec![
         Span::raw(" Tokens: "),
-        Span::styled(
-            format!("{total_str} / {target_str} {gauge}"),
-            total_tokens_style(counts.selected_tokens),
-        ),
+        Span::styled(total_str, total_tokens_style()),
     ];
 
     if area.height < 4 {
-        top_spans.push(Span::raw(" | "));
+        top_spans.push(Span::raw("  |  "));
         top_spans.extend(compact_count_spans(counts, inner_w >= 86));
     }
 
@@ -60,7 +53,10 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
     }
     if state.has_git_context() {
         top_spans.push(Span::raw("  |  "));
-        top_spans.push(git_status_span(state.include_git_context()));
+        top_spans.push(git_status_span(
+            state.include_git_context(),
+            state.git_context_tokens(),
+        ));
     }
 
     let mut lines = vec![Line::from(top_spans)];
@@ -124,26 +120,101 @@ fn render_tree_body(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) 
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
     let inner_w = usize::from(area.width.saturating_sub(2));
-    let git_hint = if state.has_git_context() {
-        " | g Git"
-    } else {
-        ""
-    };
-    let legend = if inner_w >= 100 {
-        format!(
-            " Enter Copy | Space Toggle | Tab Fold | a All | u None | d Discarded | n Unread{git_hint} | Esc Quit"
-        )
-    } else if inner_w >= 72 {
-        format!(" Enter Copy | Space Sel | Tab Fold | a/u | d/n Inspect{git_hint} | Esc Quit")
-    } else {
-        format!(" Enter Copy | Space Sel | Tab | d/n{git_hint} | Esc")
-    };
-    let footer = Paragraph::new(Line::from(Span::styled(
-        legend,
-        Style::new().fg(Color::Rgb(165, 175, 190)),
-    )))
-    .block(Block::default().borders(Borders::ALL).title(" Keys "));
+    let mut spans = vec![Span::raw(" ")];
+    let wide = inner_w >= 100;
+    let medium = inner_w >= 72;
+
+    push_key_hint(
+        &mut spans,
+        "[Enter]",
+        if medium { " Copy" } else { "" },
+        Color::Rgb(85, 220, 125),
+    );
+    spans.push(Span::raw(if wide { "  " } else { " " }));
+    push_key_hint(
+        &mut spans,
+        "[Space]",
+        if wide {
+            " Toggle"
+        } else if medium {
+            "Sel"
+        } else {
+            ""
+        },
+        Color::Rgb(110, 210, 255),
+    );
+    spans.push(Span::raw(if wide { "  " } else { " " }));
+    push_key_hint(
+        &mut spans,
+        "[Tab]",
+        if medium { " Fold" } else { "" },
+        Color::Rgb(245, 210, 75),
+    );
+    spans.push(Span::raw(if wide { "  " } else { " " }));
+    push_key_hint(
+        &mut spans,
+        "[a]",
+        if wide {
+            " All/None"
+        } else if medium {
+            "All"
+        } else {
+            ""
+        },
+        Color::Rgb(245, 210, 75),
+    );
+    spans.push(Span::raw(if wide { "  " } else { " " }));
+    push_key_hint(
+        &mut spans,
+        "[d/n]",
+        if wide { " Inspect" } else { "" },
+        Color::Rgb(140, 185, 255),
+    );
+    if state.has_git_context() {
+        spans.push(Span::raw(if wide { "  " } else { " " }));
+        let git_color = if state.include_git_context() {
+            Color::Rgb(85, 220, 125)
+        } else {
+            Color::Rgb(130, 135, 145)
+        };
+        push_key_hint(&mut spans, "[g]", " Git", git_color);
+    }
+    spans.push(Span::raw(if wide { "  " } else { " " }));
+    push_key_hint(
+        &mut spans,
+        "[?]",
+        if wide { " Help" } else { "" },
+        Color::Rgb(205, 130, 255),
+    );
+    spans.push(Span::raw(if wide { "  " } else { " " }));
+    push_key_hint(
+        &mut spans,
+        "[Esc]",
+        if medium { " Quit" } else { "" },
+        Color::Rgb(255, 115, 115),
+    );
+
+    let footer = Paragraph::new(Line::from(spans))
+        .block(Block::default().borders(Borders::ALL).title(" Keys "));
     frame.render_widget(footer, area);
+}
+
+fn push_key_hint(
+    spans: &mut Vec<Span<'static>>,
+    key: &'static str,
+    label: &'static str,
+    fg: Color,
+) {
+    spans.push(Span::styled(
+        key,
+        Style::new().fg(fg).add_modifier(Modifier::BOLD),
+    ));
+    if !label.is_empty() {
+        spans.push(Span::styled(
+            label,
+            Style::new().fg(Color::Rgb(195, 202, 214)),
+        ));
+    }
 }
 
 fn compact_count_spans(counts: crate::domain::CategoryCounts, verbose: bool) -> Vec<Span<'static>> {
@@ -168,9 +239,14 @@ fn compact_count_spans(counts: crate::domain::CategoryCounts, verbose: bool) -> 
     ]
 }
 
-fn git_status_span(enabled: bool) -> Span<'static> {
+fn git_status_span(enabled: bool, git_tokens: usize) -> Span<'static> {
     if enabled {
-        Span::styled("Git: ON", Style::new().fg(Color::Rgb(85, 220, 125)))
+        let label = if git_tokens > 0 {
+            format!("Git: ON (+{})", format_token_count(git_tokens))
+        } else {
+            "Git: ON".to_owned()
+        };
+        Span::styled(label, Style::new().fg(Color::Rgb(85, 220, 125)))
     } else {
         Span::styled(
             "Git: OFF",
