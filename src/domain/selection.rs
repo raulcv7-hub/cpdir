@@ -149,4 +149,13 @@ impl TextFileState {
     pub fn reset_to_natural(&mut self) {
         self.user_override = None;
     }
+
+    /// Upgrades an otherwise included baseline to [`NaturalExclusion::ExceedsTokenThreshold`].
+    ///
+    /// Preserves prior `.ignore` / `.gitignore` exclusion reasons and any explicit user overrides.
+    pub fn mark_exceeds_token_threshold(&mut self) {
+        if matches!(self.natural, NaturalSelection::Included) {
+            self.natural = NaturalSelection::Excluded(NaturalExclusion::ExceedsTokenThreshold);
+        }
+    }
 }

@@ -5,6 +5,7 @@ pub mod config;
 pub mod domain;
 pub mod output;
 pub mod scanner;
+pub mod tokens;
 
 /// Returns the package version embedded at compile time.
 #[must_use]
