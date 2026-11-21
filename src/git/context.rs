@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
 
+use crate::git::runner::{is_inside_work_tree, run_git_hardened};
 use crate::output::{GitCommitEntry, GitContextSnapshot, GitHotspotEntry, GitTagEntry};
 
 const DEFAULT_MAX_COMMITS: usize = 15;
@@ -69,11 +69,6 @@ pub fn extract_git_context(
         recent_tags,
         hotspots,
     })
-}
-
-fn is_inside_work_tree(repo_dir: &Path) -> bool {
-    run_git_hardened(repo_dir, &["rev-parse", "--is-inside-work-tree"])
-        .is_some_and(|out| out.trim() == "true")
 }
 
 fn query_branch_and_status(repo_dir: &Path, config: &GitContextConfig) -> (String, Vec<String>) {
@@ -253,31 +248,4 @@ fn format_optional_summary(raw: &str, max_chars: usize) -> Option<String> {
     let mut clipped: String = trimmed.chars().take(max_chars).collect();
     clipped.push_str("...");
     Some(clipped)
-}
-
-fn run_git_hardened(repo_dir: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .args([
-            "-c",
-            "core.fsmonitor=",
-            "-c",
-            "core.hooksPath=",
-            "-c",
-            "core.quotePath=false",
-            "-c",
-            "diff.external=",
-            "-c",
-            "gpg.program=",
-        ])
-        .args(args)
-        .current_dir(repo_dir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never")
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
