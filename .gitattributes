@@ -1,0 +1,10 @@
+Gitattributes
+* text=auto eol=lf
+
+*.rs text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.xml text eol=lf
+*.reg text eol=crlf
+*.exe binary

@@ -1,0 +1,26 @@
+[package]
+name = "cpdir"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100.0"
+description = "Interactive Windows 11 TUI to inspect a directory tree and copy strict XML context to the clipboard"
+readme = "README.md"
+publish = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+print_stdout = "deny"

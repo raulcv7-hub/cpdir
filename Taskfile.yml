@@ -1,0 +1,34 @@
+version: "3"
+
+tasks:
+  fmt:
+    desc: Verify code formatting without modifying files
+    cmds:
+      - cargo fmt --all -- --check
+
+  fmt:fix:
+    desc: Format all Rust source files
+    cmds:
+      - cargo fmt --all
+
+  lint:
+    desc: Run Clippy with warnings treated as errors
+    cmds:
+      - cargo clippy --all-targets --locked -- -D warnings
+
+  test:
+    desc: Execute full unit and integration test suite
+    cmds:
+      - cargo test --all-targets --locked
+
+  check:
+    desc: Run full Shift-Left verification pipeline (fmt, lint, test)
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
+
+  build:
+    desc: Build deterministic release binary
+    cmds:
+      - cargo build --release --locked
