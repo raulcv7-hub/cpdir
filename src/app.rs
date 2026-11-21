@@ -15,6 +15,7 @@ use ratatui::crossterm::terminal::{
 use crate::config::defaults::DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD;
 use crate::output::{ClipboardError, ClipboardWriter, XmlWriteError, render_strict_xml};
 use crate::scanner::{ScanConfig, ScanError, scan_directory};
+use crate::state::{MemoryStore, SavedWorkspaceState, normalize_dir_for_hash};
 use crate::tokens::{TokenCounter, TokenError, populate_token_counts};
 use crate::tui::{
     AppExitAction, TuiAppState, handle_key_event, render_active_modal, render_tree_view,
@@ -128,15 +129,38 @@ pub fn run_interactive(
         counter,
     );
 
+    let store = MemoryStore::default_system();
+    let saved = store.load_lenient(target_dir);
+    if let Some(prev) = &saved {
+        scan.tree.apply_overrides(&prev.overrides);
+    }
+
     let mut state = TuiAppState::new(scan.tree, false);
+    if let Some(prev) = saved
+        && let Some(git_enabled) = prev.git_context_enabled
+    {
+        state.set_include_git_context(git_enabled);
+    }
+
     run_tui_event_loop(&mut state)?;
 
     match state.exit_action() {
         Some(AppExitAction::CopyToClipboard) => {
+            let include_git = state.has_git_context() && !state.include_git_context();
+            let git_persist = if include_git { Some(false) } else { None };
             let tree = state.into_tree();
             let counts = tree.compute_metrics().counts;
             let xml = render_strict_xml(&tree, &scan.contents, None).map_err(AppError::Xml)?;
             clipboard.copy_text(&xml).map_err(AppError::Clipboard)?;
+
+            let to_save = SavedWorkspaceState::new(
+                normalize_dir_for_hash(target_dir),
+                tree.collect_overrides(),
+                git_persist,
+            );
+            // Best-effort persistence: never fail clipboard confirmation over AppData I/O.
+            let _ = store.save(target_dir, &to_save);
+
             Ok(RunOutcome::Copied {
                 files: counts.read_files,
                 tokens: counts.selected_tokens,

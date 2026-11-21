@@ -6,6 +6,7 @@ pub mod config;
 pub mod domain;
 pub mod output;
 pub mod scanner;
+pub mod state;
 pub mod tokens;
 pub mod tui;
 
