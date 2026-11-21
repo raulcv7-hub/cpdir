@@ -119,42 +119,18 @@ impl DirectoryTree {
         }
 
         let rollup = self.compute_metrics().rollups[id.0];
-        let mut stack = vec![id];
-
-        if rollup.selected_files > 0 {
-            let is_root = id == Self::ROOT;
-            while let Some(curr) = stack.pop() {
-                let mark_folder_excluded = !(is_root && curr == Self::ROOT);
-                self.mutate_subtree_step(
-                    curr,
-                    &mut stack,
-                    |dir| {
-                        if mark_folder_excluded {
-                            dir.folder_override = Some(false);
-                        }
-                    },
-                    |file| file.state.set_selected(false),
-                );
+        if id == Self::ROOT {
+            if rollup.selected_files > 0 {
+                self.unselect_all();
+                return;
             }
-        } else if rollup.has_natural_included {
-            while let Some(curr) = stack.pop() {
-                self.mutate_subtree_step(
-                    curr,
-                    &mut stack,
-                    |dir| dir.folder_override = None,
-                    |file| file.state.reset_to_natural(),
-                );
-            }
-        } else {
-            while let Some(curr) = stack.pop() {
-                self.mutate_subtree_step(
-                    curr,
-                    &mut stack,
-                    |dir| dir.folder_override = None,
-                    |file| file.state.set_selected(true),
-                );
+            if rollup.has_natural_included {
+                self.select_all_default();
+                return;
             }
         }
+
+        self.toggle_subtree(id, rollup.selected_files > 0, rollup.has_natural_included);
     }
 
     /// Resets every text file and directory override to safe natural defaults.
@@ -239,6 +215,54 @@ impl DirectoryTree {
             }
         }
         items
+    }
+
+    fn toggle_subtree(&mut self, id: NodeId, turn_off: bool, has_natural_included: bool) {
+        let ancestor_excluded = id != Self::ROOT && self.is_ancestor_excluded(id);
+        let root_override = if turn_off {
+            Some(false)
+        } else if ancestor_excluded {
+            Some(true)
+        } else {
+            None
+        };
+
+        let mut stack = vec![id];
+        while let Some(curr) = stack.pop() {
+            let dir_override = if curr == id { root_override } else { None };
+            self.mutate_subtree_step(
+                curr,
+                &mut stack,
+                |dir| dir.folder_override = dir_override,
+                |file| {
+                    if turn_off {
+                        file.state.set_selected(false);
+                    } else if has_natural_included {
+                        file.state.reset_to_natural();
+                    } else {
+                        file.state.set_selected(true);
+                    }
+                },
+            );
+        }
+    }
+
+    fn is_ancestor_excluded(&self, id: NodeId) -> bool {
+        let mut curr = self.nodes.get(id.0).and_then(|n| n.parent);
+        while let Some(pid) = curr {
+            let Some(node) = self.nodes.get(pid.0) else {
+                break;
+            };
+            if let NodeKind::Directory(dir) = &node.kind {
+                match dir.folder_override {
+                    Some(false) => return true,
+                    Some(true) => return false,
+                    None => {}
+                }
+            }
+            curr = node.parent;
+        }
+        false
     }
 
     fn mutate_subtree_step<FD, FF>(

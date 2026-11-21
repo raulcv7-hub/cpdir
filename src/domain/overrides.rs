@@ -8,29 +8,38 @@ impl DirectoryTree {
     /// Applies saved per-path delta overrides top-down, preserving auto-inclusion for new files.
     pub fn apply_overrides(&mut self, saved: &BTreeMap<String, bool>) {
         let len = self.nodes.len();
-        let mut inherited_dir_override: Vec<Option<bool>> = vec![None; len];
+        let mut inherited_excluded = vec![false; len];
 
         for idx in 0..len {
-            let parent_inherited = self.nodes[idx]
+            let parent_excluded = self.nodes[idx]
                 .parent
-                .and_then(|pid| inherited_dir_override[pid.0]);
+                .is_some_and(|pid| inherited_excluded[pid.0]);
             let rel_path = self.nodes[idx].rel_path.clone();
             let explicit = saved.get(&rel_path).copied();
 
             match &mut self.nodes[idx].kind {
                 NodeKind::Directory(dir) => {
-                    let effective = if idx == 0 {
-                        None
+                    if idx == 0 {
+                        dir.folder_override = None;
+                        inherited_excluded[idx] = false;
                     } else {
-                        explicit.or(parent_inherited)
-                    };
-                    dir.folder_override = effective;
-                    inherited_dir_override[idx] = effective;
+                        let self_excluded = match explicit {
+                            Some(false) => true,
+                            Some(true) => false,
+                            None => parent_excluded,
+                        };
+                        dir.folder_override = if self_excluded == parent_excluded {
+                            None
+                        } else {
+                            Some(!self_excluded)
+                        };
+                        inherited_excluded[idx] = self_excluded;
+                    }
                 }
                 NodeKind::TextFile(file) => {
                     if let Some(val) = explicit {
                         file.state.set_selected(val);
-                    } else if let Some(false) = parent_inherited {
+                    } else if parent_excluded {
                         file.state.set_selected(false);
                     }
                 }
@@ -51,11 +60,18 @@ impl DirectoryTree {
 
             match &node.kind {
                 NodeKind::Directory(dir) => {
-                    if idx != 0 && dir.folder_override == Some(false) {
-                        if !parent_excluded {
-                            out.insert(node.rel_path.clone(), false);
-                        }
-                        inherited_excluded[idx] = true;
+                    if idx == 0 {
+                        inherited_excluded[idx] = false;
+                        continue;
+                    }
+                    let self_excluded = match dir.folder_override {
+                        Some(false) => true,
+                        Some(true) => false,
+                        None => parent_excluded,
+                    };
+                    inherited_excluded[idx] = self_excluded;
+                    if self_excluded != parent_excluded {
+                        out.insert(node.rel_path.clone(), !self_excluded);
                     }
                 }
                 NodeKind::TextFile(file) => {
