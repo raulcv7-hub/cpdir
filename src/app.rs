@@ -16,7 +16,9 @@ use crate::config::defaults::DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD;
 use crate::output::{ClipboardError, ClipboardWriter, XmlWriteError, render_strict_xml};
 use crate::scanner::{ScanConfig, ScanError, scan_directory};
 use crate::tokens::{TokenCounter, TokenError, populate_token_counts};
-use crate::tui::{AppExitAction, TuiAppState, handle_key_event, render_tree_view};
+use crate::tui::{
+    AppExitAction, TuiAppState, handle_key_event, render_active_modal, render_tree_view,
+};
 
 /// Successful interactive run result returned to `main`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,7 +152,11 @@ fn run_tui_event_loop(state: &mut TuiAppState) -> Result<(), AppError> {
     while state.exit_action().is_none() {
         guard
             .terminal
-            .draw(|frame| render_tree_view(frame, frame.area(), state))
+            .draw(|frame| {
+                let area = frame.area();
+                render_tree_view(frame, area, state);
+                render_active_modal(frame, area, state);
+            })
             .map_err(|err| AppError::TerminalIo(err.to_string()))?;
 
         match event::read() {
