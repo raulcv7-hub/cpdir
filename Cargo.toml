@@ -8,6 +8,7 @@ readme = "README.md"
 publish = false
 
 [dev-dependencies]
+proptest = "1.12"
 quick-xml = "0.42"
 tempfile = "3.27"
 
