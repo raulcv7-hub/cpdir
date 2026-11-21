@@ -12,7 +12,8 @@ use cpdir::domain::{
     TextFileData, TextFileState,
 };
 use cpdir::output::{
-    GitCommitEntry, GitContextSnapshot, GitHotspotEntry, XmlWriteError, render_strict_xml,
+    GitCommitEntry, GitContextSnapshot, GitHotspotEntry, GitTagEntry, XmlWriteError,
+    render_strict_xml,
 };
 use cpdir::scanner::{ReadFileOutcome, read_bounded_utf8};
 
@@ -149,6 +150,10 @@ fn golden_git_context_escapes_hostile_xml_and_handles_empty_sections() {
             subject: "fix: escape <tag> & ]]>".to_owned(),
             body: Some("line1 <x>\nline2 & \"y\"".to_owned()),
         }],
+        recent_tags: vec![GitTagEntry {
+            name: "v0.4.0<beta>".to_owned(),
+            summary: Some("release & notes".to_owned()),
+        }],
         hotspots: vec![GitHotspotEntry {
             rel_path: "src/a&b.rs".to_owned(),
             commits: 7,
@@ -162,16 +167,20 @@ fn golden_git_context_escapes_hostile_xml_and_handles_empty_sections() {
     assert!(xml.contains("<branch>feat/a&amp;b&lt;c&gt;</branch>"));
     assert!(xml.contains("a1b2c3d | fix: escape &lt;tag&gt; &amp; ]]&gt;"));
     assert!(xml.contains("        line1 &lt;x&gt;"));
+    assert!(xml.contains("<recent_tags count=\"1\">"));
+    assert!(xml.contains("v0.4.0&lt;beta&gt; | release &amp; notes"));
     assert!(xml.contains("      src/a&amp;b.rs (7 commits)"));
 
     let clean_git = GitContextSnapshot {
         branch: "main".to_owned(),
         working_tree_lines: vec![],
         recent_commits: vec![],
+        recent_tags: vec![],
         hotspots: vec![],
     };
     let clean_xml = render_strict_xml(&tree, &contents, Some(&clean_git)).expect("clean git");
     assert!(clean_xml.contains("<working_tree/>"));
+    assert!(!clean_xml.contains("<recent_tags"));
     assert!(!clean_xml.contains("<hotspots>"));
     assert!(parse_strict_xml(&clean_xml).is_ok());
 }
@@ -186,7 +195,6 @@ fn sanitizes_illegal_xml10_controls_and_fails_fast_on_missing_content() {
     let mut tree = DirectoryTree::new("logs_repo");
     let log_id = add_selected(&mut tree, DirectoryTree::ROOT, "ansi.log", byte_len, 10);
 
-    // Missing content triggers explicit fail-fast error.
     let err =
         render_strict_xml(&tree, &HashMap::new(), None).expect_err("must reject missing body");
     assert_eq!(
