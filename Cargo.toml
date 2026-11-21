@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 arboard = "3.6"
 ignore = "0.4"
+ratatui = "0.30"
 rayon = "1.11"
 tiktoken-rs = "0.9"
 
