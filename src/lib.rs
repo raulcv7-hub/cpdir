@@ -7,6 +7,7 @@ pub mod domain;
 pub mod git;
 pub mod output;
 pub mod scanner;
+pub mod security;
 pub mod state;
 pub mod tokens;
 pub mod tui;

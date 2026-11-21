@@ -1,4 +1,4 @@
-//! Hard safety limits, pruned dependency directories, and binary extension defaults.
+//! Hard safety limits, pruned dependency directories, binary extensions, and secret exemptions.
 
 use std::path::Path;
 
@@ -43,6 +43,25 @@ pub const KNOWN_BINARY_EXTENSIONS: &[&str] = &[
     "xz", "zip", "zst",
 ];
 
+/// Template and lockfile basenames exempted from heuristic secret scanning alerts.
+pub const SECRET_EXEMPT_FILENAMES: &[&str] = &[
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    ".env.dist",
+    ".env.defaults",
+    "env.example",
+    "example.env",
+    "sample.env",
+    "template.env",
+    "Cargo.lock",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "uv.lock",
+    "poetry.lock",
+];
+
 /// Returns `true` when `dir_name` matches a dependency, build, or VCS folder to prune.
 #[must_use]
 pub fn is_pruned_dir_name(dir_name: &str) -> bool {
@@ -60,4 +79,15 @@ pub fn is_known_binary_extension(path: &Path) -> bool {
     KNOWN_BINARY_EXTENSIONS
         .iter()
         .any(|candidate| ext.eq_ignore_ascii_case(candidate))
+}
+
+/// Returns `true` when `rel_path` refers to an exempt template or lockfile basename.
+#[must_use]
+pub fn is_secret_scan_exempt_path(rel_path: &str) -> bool {
+    let Some(file_name) = Path::new(rel_path).file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    SECRET_EXEMPT_FILENAMES
+        .iter()
+        .any(|candidate| file_name.eq_ignore_ascii_case(candidate))
 }

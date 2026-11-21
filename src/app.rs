@@ -16,6 +16,7 @@ use crate::config::defaults::DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD;
 use crate::git::{GitContextConfig, extract_git_context};
 use crate::output::{ClipboardError, ClipboardWriter, XmlWriteError, render_strict_xml};
 use crate::scanner::{ScanConfig, ScanError, scan_directory};
+use crate::security::{SecretScanner, populate_secret_hits};
 use crate::state::{MemoryStore, SavedWorkspaceState, normalize_dir_for_hash};
 use crate::tokens::{TokenCounter, TokenError, populate_token_counts};
 use crate::tui::{
@@ -129,6 +130,7 @@ pub fn run_interactive(
         DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD,
         counter,
     );
+    populate_secret_hits(&mut scan.tree, &scan.contents, SecretScanner::global());
 
     let store = MemoryStore::default_system();
     let saved = store.load_lenient(target_dir);

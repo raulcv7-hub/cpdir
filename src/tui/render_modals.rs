@@ -7,9 +7,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::domain::metrics::InspectorReason;
-use crate::domain::{FileDiscardReason, InspectorCategory, PrunedDirReason, UnselectedReason};
+use crate::domain::{
+    FileDiscardReason, InspectorCategory, NodeKind, PrunedDirReason, UnselectedReason,
+};
 use crate::tui::app_state::{TuiAppState, UiMode};
 use crate::tui::theme::{format_token_count, sanitize_tui_label, secret_marker_style};
+
+const MAX_MODAL_SECRET_PATHS: usize = 5;
 
 /// Renders the active modal overlay on top of the main tree view when `mode` is not [`UiMode::Tree`].
 pub fn render_active_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
@@ -21,7 +25,7 @@ pub fn render_active_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAppStat
         UiMode::ConfirmSecrets {
             active_secret_files,
         } => {
-            render_confirm_secrets_modal(frame, area, active_secret_files);
+            render_confirm_secrets_modal(frame, area, state, active_secret_files);
         }
     }
 }
@@ -88,10 +92,31 @@ fn render_inspector_modal(
     frame.render_widget(modal, popup);
 }
 
-fn render_confirm_secrets_modal(frame: &mut Frame<'_>, area: Rect, active_secret_files: usize) {
-    let width = area.width.saturating_mul(64) / 100;
-    let popup_w = width.max(46).min(area.width);
-    let popup_h = 8u16.min(area.height);
+fn render_confirm_secrets_modal(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &TuiAppState,
+    active_secret_files: usize,
+) {
+    let flagged: Vec<(String, usize)> = state
+        .tree()
+        .nodes()
+        .iter()
+        .filter_map(|n| match &n.kind {
+            NodeKind::TextFile(f) if f.secret_hits > 0 && f.state.is_selected() => {
+                Some((sanitize_tui_label(&n.rel_path), f.secret_hits))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let shown = flagged.len().min(MAX_MODAL_SECRET_PATHS);
+    let has_more = flagged.len() > MAX_MODAL_SECRET_PATHS;
+    let extra_rows = u16::try_from(shown + usize::from(has_more)).unwrap_or(6);
+
+    let width = area.width.saturating_mul(68) / 100;
+    let popup_w = width.max(50).min(area.width);
+    let popup_h = (8u16 + extra_rows).min(area.height);
     let popup = Rect {
         x: area.x + area.width.saturating_sub(popup_w) / 2,
         y: area.y + area.height.saturating_sub(popup_h) / 2,
@@ -101,32 +126,41 @@ fn render_confirm_secrets_modal(frame: &mut Frame<'_>, area: Rect, active_secret
 
     frame.render_widget(Clear, popup);
 
-    let lines = vec![
+    let mut lines = vec![
         Line::raw(""),
         Line::styled(
             format!("  {active_secret_files} selected file(s) contain potential secrets [!]."),
             secret_marker_style(),
         ),
-        Line::raw("  Review or deselect flagged files before sharing with an LLM."),
-        Line::raw(""),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                "[y / Enter]",
-                Style::new()
-                    .fg(Color::Rgb(255, 145, 55))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" Copy anyway    "),
-            Span::styled(
-                "[n / Esc]",
-                Style::new()
-                    .fg(Color::Rgb(85, 220, 125))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" Return to tree"),
-        ]),
     ];
+    for (rel, hits) in flagged.iter().take(MAX_MODAL_SECRET_PATHS) {
+        lines.push(Line::styled(
+            format!("    - {rel} ({hits} hit(s))"),
+            Style::new().fg(Color::Rgb(245, 210, 75)),
+        ));
+    }
+    if has_more {
+        let rest = flagged.len() - MAX_MODAL_SECRET_PATHS;
+        lines.push(Line::raw(format!("    ... (+{rest} more flagged file(s))")));
+    }
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            "[y / Enter]",
+            Style::new()
+                .fg(Color::Rgb(255, 145, 55))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Copy anyway    "),
+        Span::styled(
+            "[n / Esc]",
+            Style::new()
+                .fg(Color::Rgb(85, 220, 125))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" Return to tree"),
+    ]));
 
     let dialog = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
