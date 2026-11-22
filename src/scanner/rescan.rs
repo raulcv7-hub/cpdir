@@ -3,14 +3,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::config::defaults::should_prune_dir;
+pub use crate::config::limits::DEFAULT_RESCAN_MAX_ENTRIES;
+use crate::config::rules::should_prune_dir;
 use crate::domain::{DirectoryTree, NodeId, PrunedDirReason, TextFileData, TextFileState};
 use crate::scanner::file_reader::{ReadFileOutcome, read_bounded_utf8};
 use crate::scanner::ignore_rules::IgnoreRuleStack;
 use crate::scanner::walker::{ScanConfig, ScanError, read_sorted_entries};
-
-/// Hard entry cap applied when re-scanning a pruned dependency/output directory from the TUI.
-pub const DEFAULT_RESCAN_MAX_ENTRIES: usize = 2_000;
 
 /// Result produced by re-scanning a single pruned directory subtree under `max_entries`.
 #[derive(Debug)]

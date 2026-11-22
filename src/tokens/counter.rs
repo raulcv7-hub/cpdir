@@ -1,14 +1,10 @@
-//! Parallel `o200k_base` token counter using `tiktoken-rs` and `rayon`.
+//! Parallel `o200k_base` token counter decoupled from tree structures.
 
-use std::collections::HashMap;
 use std::fmt;
-use std::hash::BuildHasher;
 use std::sync::OnceLock;
 
 use rayon::prelude::*;
 use tiktoken_rs::CoreBPE;
-
-use crate::domain::{DirectoryTree, NodeId, NodeKind};
 
 const PARALLEL_MIN_FILES: usize = 8;
 
@@ -64,47 +60,20 @@ impl TokenCounter {
     pub fn count(&self, text: &str) -> usize {
         self.bpe.encode_ordinary(text).len()
     }
-}
 
-/// Counts tokens for all readable text files in `tree` and auto-deselects entries above `threshold`.
-pub fn populate_token_counts<S: BuildHasher>(
-    tree: &mut DirectoryTree,
-    contents: &HashMap<NodeId, String, S>,
-    auto_deselect_threshold: usize,
-    counter: TokenCounter,
-) {
-    let work: Vec<(NodeId, &str)> = tree
-        .nodes()
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, node)| {
-            if matches!(node.kind, NodeKind::TextFile(_)) {
-                let id = NodeId(idx);
-                contents.get(&id).map(|text| (id, text.as_str()))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let counts: Vec<(NodeId, usize)> = if work.len() < PARALLEL_MIN_FILES {
-        work.into_iter()
-            .map(|(id, text)| (id, counter.count(text)))
-            .collect()
-    } else {
-        work.par_iter()
-            .map(|&(id, text)| (id, counter.count(text)))
-            .collect()
-    };
-
-    for (id, token_count) in counts {
-        if let Some(node) = tree.get_mut(id)
-            && let NodeKind::TextFile(file) = &mut node.kind
-        {
-            file.tokens = token_count;
-            if token_count > auto_deselect_threshold {
-                file.state.mark_exceeds_token_threshold();
-            }
+    /// Counts tokens for `(key, text)` entries sequentially or in parallel via `rayon`.
+    #[must_use]
+    pub fn count_batch<K: Copy + Send + Sync>(&self, items: &[(K, &str)]) -> Vec<(K, usize)> {
+        if items.len() < PARALLEL_MIN_FILES {
+            items
+                .iter()
+                .map(|&(key, text)| (key, self.count(text)))
+                .collect()
+        } else {
+            items
+                .par_iter()
+                .map(|&(key, text)| (key, self.count(text)))
+                .collect()
         }
     }
 }

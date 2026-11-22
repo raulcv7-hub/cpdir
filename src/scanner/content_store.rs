@@ -5,11 +5,9 @@ use std::fmt;
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
 
+pub use crate::config::limits::INLINE_CONTENT_CACHE_BYTES;
 use crate::domain::{DirectoryTree, FileDiscardReason, NodeId, NodeKind};
 use crate::scanner::file_reader::{ReadFileOutcome, read_bounded_utf8};
-
-/// Maximum byte size retained inline in RAM for unselected files during a TUI session.
-pub const INLINE_CONTENT_CACHE_BYTES: u64 = 64 * 1024;
 
 /// Errors emitted when re-reading an unselected file that the user enabled prior to copying.
 #[derive(Debug, Clone, PartialEq, Eq)]

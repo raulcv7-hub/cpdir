@@ -2,6 +2,11 @@
 
 use std::path::Path;
 
+use crate::config::limits::{
+    DEFAULT_GIT_HOTSPOT_COMMIT_WINDOW, DEFAULT_GIT_MAX_COMMIT_BODY_CHARS, DEFAULT_GIT_MAX_COMMITS,
+    DEFAULT_GIT_MAX_DIFF_NUMSTAT_LINES, DEFAULT_GIT_MAX_HOTSPOTS,
+    DEFAULT_GIT_MAX_TAG_SUMMARY_CHARS, DEFAULT_GIT_MAX_TAGS, DEFAULT_GIT_MAX_WORKING_TREE_LINES,
+};
 use crate::domain::{
     GitCommitEntry, GitContextSnapshot, GitDiffNumstatEntry, GitHotspotEntry, GitTagEntry,
 };
@@ -10,15 +15,6 @@ use crate::git::parser::{
     parse_recent_tags,
 };
 use crate::git::runner::{GitAvailability, probe_work_tree, run_git_hardened};
-
-const DEFAULT_MAX_COMMITS: usize = 15;
-const DEFAULT_MAX_COMMIT_BODY_CHARS: usize = 300;
-const DEFAULT_MAX_TAGS: usize = 5;
-const DEFAULT_MAX_TAG_SUMMARY_CHARS: usize = 220;
-const DEFAULT_MAX_HOTSPOTS: usize = 10;
-const DEFAULT_HOTSPOT_COMMIT_WINDOW: usize = 100;
-const DEFAULT_MAX_WORKING_TREE_LINES: usize = 100;
-const DEFAULT_MAX_DIFF_NUMSTAT_LINES: usize = 50;
 
 /// Limits controlling `<git_context>` extraction size and history depth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,14 +40,14 @@ pub struct GitContextConfig {
 impl Default for GitContextConfig {
     fn default() -> Self {
         Self {
-            max_commits: DEFAULT_MAX_COMMITS,
-            max_commit_body_chars: DEFAULT_MAX_COMMIT_BODY_CHARS,
-            max_tags: DEFAULT_MAX_TAGS,
-            max_tag_summary_chars: DEFAULT_MAX_TAG_SUMMARY_CHARS,
-            max_hotspots: DEFAULT_MAX_HOTSPOTS,
-            hotspot_commit_window: DEFAULT_HOTSPOT_COMMIT_WINDOW,
-            max_working_tree_lines: DEFAULT_MAX_WORKING_TREE_LINES,
-            max_diff_numstat_lines: DEFAULT_MAX_DIFF_NUMSTAT_LINES,
+            max_commits: DEFAULT_GIT_MAX_COMMITS,
+            max_commit_body_chars: DEFAULT_GIT_MAX_COMMIT_BODY_CHARS,
+            max_tags: DEFAULT_GIT_MAX_TAGS,
+            max_tag_summary_chars: DEFAULT_GIT_MAX_TAG_SUMMARY_CHARS,
+            max_hotspots: DEFAULT_GIT_MAX_HOTSPOTS,
+            hotspot_commit_window: DEFAULT_GIT_HOTSPOT_COMMIT_WINDOW,
+            max_working_tree_lines: DEFAULT_GIT_MAX_WORKING_TREE_LINES,
+            max_diff_numstat_lines: DEFAULT_GIT_MAX_DIFF_NUMSTAT_LINES,
         }
     }
 }
