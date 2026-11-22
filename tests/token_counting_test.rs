@@ -8,10 +8,9 @@ use std::fs;
 use common::workspace::{WorkspaceBuilder, sample_png_bytes};
 use common::xml_validator::parse_strict_xml;
 use cpdir::config::defaults::{DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD, HARD_READ_BYTE_CAP};
-use cpdir::domain::metrics::InspectorReason;
 use cpdir::domain::{
-    DirectoryTree, FileDiscardReason, InspectorCategory, NodeId, NodeKind, UnselectedReason,
-    WeightTier,
+    DirectoryTree, FileDiscardReason, InspectorEntryKind, InspectorTab, NodeId, NodeKind,
+    UnselectedReason, WeightTier,
 };
 use cpdir::output::render_strict_xml;
 use cpdir::scanner::{
@@ -152,11 +151,11 @@ fn auto_deselects_real_file_over_50k_tokens_without_overwriting_gitignore() {
 
     let unread: BTreeMap<String, UnselectedReason> = scan
         .tree
-        .inspector_items(InspectorCategory::Unread)
+        .inspector_entries(&metrics, InspectorTab::Unread)
         .into_iter()
-        .map(|item| match item.reason {
-            InspectorReason::UnreadFile(r) => (item.rel_path, r),
-            other => panic!("unexpected inspector reason {other:?}"),
+        .filter_map(|item| match item.kind {
+            InspectorEntryKind::UnreadFile { reason, .. } => Some((item.rel_path, reason)),
+            _ => None,
         })
         .collect();
     assert_eq!(

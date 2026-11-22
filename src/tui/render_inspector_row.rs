@@ -4,10 +4,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::domain::{
-    FileDiscardReason, NodeId, NodeKind, PrunedDirReason, SecretRuleKind, UnselectedReason,
+    FileDiscardReason, InspectorEntry, InspectorEntryKind, NodeId, NodeKind, PrunedDirReason,
+    SecretRuleKind, UnselectedReason,
 };
 use crate::tui::app_state::TuiAppState;
-use crate::tui::inspector_items::{InspectorEntry, InspectorEntryKind};
 use crate::tui::theme::{
     cursor_glyph_style, cursor_row_style, format_token_count, sanitize_tui_label,
     secret_marker_style, secret_rule_label,

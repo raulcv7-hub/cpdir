@@ -2,8 +2,8 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
+use crate::domain::InspectorTab;
 use crate::tui::app_state::{TuiAppState, UiMode};
-use crate::tui::inspector_items::InspectorTab;
 
 /// Applies a single keyboard event to [`TuiAppState`], ignoring Win32 `Release` events.
 pub fn handle_key_event(state: &mut TuiAppState, key: KeyEvent) {

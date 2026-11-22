@@ -3,8 +3,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cpdir::domain::{
-    DirectoryTree, FileDiscardReason, FolderSelectionState, InspectorCategory, NaturalExclusion,
-    NaturalSelection, NodeId, NodeKind, NodeRollup, PrunedDirReason, TextFileData, TextFileState,
+    DirectoryTree, FileDiscardReason, FolderSelectionState, InspectorEntry, InspectorEntryKind,
+    InspectorTab, NaturalExclusion, NaturalSelection, NodeId, NodeKind, NodeRollup,
+    PrunedDirReason, TextFileData, TextFileState,
 };
 use proptest::prelude::*;
 
@@ -35,6 +36,7 @@ fn gen_node_strategy() -> impl Strategy<Value = GenNode> {
         1 => Just(NaturalSelection::Excluded(NaturalExclusion::DotIgnore)),
         1 => Just(NaturalSelection::Excluded(NaturalExclusion::GitIgnore)),
         1 => Just(NaturalSelection::Excluded(NaturalExclusion::ExceedsTokenThreshold)),
+        1 => Just(NaturalSelection::Excluded(NaturalExclusion::Pruned)),
     ];
     let disc = prop_oneof![
         Just(FileDiscardReason::Binary),
@@ -130,13 +132,24 @@ fn assert_all_invariants(tree: &DirectoryTree) -> Result<(), TestCaseError> {
     );
     prop_assert!(metrics.counts.active_secret_files <= metrics.counts.total_secret_files);
     prop_assert_eq!(
-        tree.inspector_items(InspectorCategory::Discarded).len(),
+        tree.inspector_entries(&metrics, InspectorTab::Discarded)
+            .len(),
         metrics.counts.discarded_items
     );
-    prop_assert_eq!(
-        tree.inspector_items(InspectorCategory::Unread).len(),
-        metrics.counts.unread_files
-    );
+
+    let unread_file_count = tree
+        .inspector_entries(&metrics, InspectorTab::Unread)
+        .into_iter()
+        .filter(|e| matches!(e.kind, InspectorEntryKind::UnreadFile { .. }))
+        .count();
+    prop_assert_eq!(unread_file_count, metrics.counts.unread_files);
+
+    let secret_node_count: HashSet<NodeId> = tree
+        .inspector_entries(&metrics, InspectorTab::Secrets)
+        .iter()
+        .filter_map(InspectorEntry::node_id)
+        .collect();
+    prop_assert_eq!(secret_node_count.len(), metrics.counts.total_secret_files);
 
     for (idx, node) in tree.nodes().iter().enumerate() {
         if let NodeKind::Directory(dir) = &node.kind {

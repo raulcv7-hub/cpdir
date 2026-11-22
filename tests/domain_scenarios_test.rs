@@ -2,11 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use cpdir::domain::metrics::InspectorReason;
 use cpdir::domain::{
-    DirectoryTree, FileDiscardReason, FolderSelectionState, InspectorCategory, NaturalExclusion,
-    NaturalSelection, NodeId, NodeKind, PrunedDirReason, TextFileData, TextFileState, TreeError,
-    UnselectedReason, WeightTier,
+    DirectoryTree, FileDiscardReason, FolderSelectionState, InspectorEntryKind, InspectorTab,
+    NaturalExclusion, NaturalSelection, NodeId, NodeKind, PrunedDirReason, TextFileData,
+    TextFileState, TreeError, UnselectedReason, WeightTier,
 };
 
 struct MixedFixture {
@@ -103,6 +102,17 @@ fn is_selected(tree: &DirectoryTree, id: NodeId) -> bool {
     )
 }
 
+fn unread_file_reasons(tree: &DirectoryTree) -> Vec<(String, UnselectedReason)> {
+    let metrics = tree.compute_metrics();
+    tree.inspector_entries(&metrics, InspectorTab::Unread)
+        .into_iter()
+        .filter_map(|e| match e.kind {
+            InspectorEntryKind::UnreadFile { reason, .. } => Some((e.rel_path, reason)),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn mixed_folder_toggle_protects_secrets_and_oversized_files() {
     let mut f = build_mixed_fixture();
@@ -151,19 +161,12 @@ fn mixed_folder_toggle_protects_secrets_and_oversized_files() {
     assert_eq!(f.tree.compute_metrics().counts.read_files, 2);
     assert!(is_selected(&f.tree, f.debug_log));
     assert_eq!(
-        f.tree
-            .inspector_items(InspectorCategory::Unread)
-            .into_iter()
-            .map(|i| (i.rel_path, i.reason))
-            .collect::<Vec<_>>(),
+        unread_file_reasons(&f.tree),
         vec![
-            (
-                "src/.env".to_owned(),
-                InspectorReason::UnreadFile(UnselectedReason::GitIgnore),
-            ),
+            ("src/.env".to_owned(), UnselectedReason::GitIgnore),
             (
                 "src/dump.json".to_owned(),
-                InspectorReason::UnreadFile(UnselectedReason::ExceedsTokenThreshold),
+                UnselectedReason::ExceedsTokenThreshold,
             ),
         ]
     );
@@ -227,7 +230,7 @@ fn reingested_pruned_subtree_stays_excluded_on_select_all_default_and_clean_over
     tree.record_pruned_dir("vendor", PrunedDirReason::DependencyOrVcs);
 
     let mut subtree = DirectoryTree::new("vendor");
-    let dep = add_text(
+    add_text(
         &mut subtree,
         DirectoryTree::ROOT,
         "dep.rs",
@@ -235,7 +238,6 @@ fn reingested_pruned_subtree_stays_excluded_on_select_all_default_and_clean_over
         0,
         NaturalSelection::Included,
     );
-    let _ = dep;
     add_text(
         &mut subtree,
         DirectoryTree::ROOT,
@@ -257,19 +259,10 @@ fn reingested_pruned_subtree_stays_excluded_on_select_all_default_and_clean_over
     tree.select_all_default();
     assert_eq!(tree.compute_metrics().counts.read_files, 1);
     assert_eq!(
-        tree.inspector_items(InspectorCategory::Unread)
-            .into_iter()
-            .map(|i| (i.rel_path, i.reason))
-            .collect::<Vec<_>>(),
+        unread_file_reasons(&tree),
         vec![
-            (
-                "vendor/dep.rs".to_owned(),
-                InspectorReason::UnreadFile(UnselectedReason::PrunedDir),
-            ),
-            (
-                "vendor/ignored.log".to_owned(),
-                InspectorReason::UnreadFile(UnselectedReason::GitIgnore),
-            ),
+            ("vendor/dep.rs".to_owned(), UnselectedReason::PrunedDir),
+            ("vendor/ignored.log".to_owned(), UnselectedReason::GitIgnore),
         ]
     );
 

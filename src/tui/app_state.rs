@@ -1,7 +1,6 @@
 //! Pure TUI state machine driving selection, modals, and exit intents.
 
-use crate::domain::{DirectoryTree, InspectorCategory, InspectorItem, TreeMetrics, VisibleRow};
-use crate::tui::inspector_items::InspectorTab;
+use crate::domain::{DirectoryTree, InspectorTab, TreeMetrics, VisibleRow};
 use crate::tui::inspector_state::InspectorState;
 use crate::tui::mouse::TuiViewportAreas;
 
@@ -193,12 +192,6 @@ impl TuiAppState {
     #[must_use]
     pub const fn exit_action(&self) -> Option<AppExitAction> {
         self.exit_action
-    }
-
-    /// Collects inspector items for the requested category.
-    #[must_use]
-    pub fn inspector_items(&self, category: InspectorCategory) -> Vec<InspectorItem> {
-        self.tree.inspector_items(category)
     }
 
     /// Returns `true` if an on-demand pruned directory re-ingest has been requested.

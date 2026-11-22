@@ -9,8 +9,9 @@ use std::process::Command;
 
 use common::workspace::{WorkspaceBuilder, mid_stream_corrupt_utf8_bytes, sample_png_bytes};
 use common::xml_validator::{ParsedXmlFile, parse_strict_xml};
-use cpdir::domain::metrics::InspectorReason;
-use cpdir::domain::{InspectorCategory, NodeKind, PrunedDirReason, UnselectedReason};
+use cpdir::domain::{
+    InspectorEntryKind, InspectorTab, NodeKind, PrunedDirReason, UnselectedReason,
+};
 use cpdir::output::render_strict_xml;
 use cpdir::scanner::walker::resolve_root_name;
 use cpdir::scanner::{ScanConfig, ScanError, scan_directory};
@@ -69,13 +70,14 @@ fn golden_multilevel_ignore_precedence_pruning_and_xml_emission() {
         ]
     );
 
+    let metrics = scan.tree.compute_metrics();
     let unread_map: BTreeMap<String, UnselectedReason> = scan
         .tree
-        .inspector_items(InspectorCategory::Unread)
+        .inspector_entries(&metrics, InspectorTab::Unread)
         .into_iter()
-        .map(|item| match item.reason {
-            InspectorReason::UnreadFile(r) => (item.rel_path, r),
-            other => panic!("expected unread file reason, got {other:?}"),
+        .filter_map(|item| match item.kind {
+            InspectorEntryKind::UnreadFile { reason, .. } => Some((item.rel_path, reason)),
+            _ => None,
         })
         .collect();
     assert_eq!(
@@ -104,7 +106,6 @@ fn golden_multilevel_ignore_precedence_pruning_and_xml_emission() {
         NodeKind::Directory(d) if !d.is_expanded
     ));
 
-    let metrics = scan.tree.compute_metrics();
     assert_eq!(metrics.counts.read_files, 10);
     assert_eq!(metrics.counts.unread_files, 6);
     assert_eq!(metrics.counts.discarded_items, 5);

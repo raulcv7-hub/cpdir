@@ -3,9 +3,8 @@
 use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
-use crate::domain::NodeKind;
+use crate::domain::{InspectorTab, NodeKind};
 use crate::tui::app_state::{TuiAppState, UiMode};
-use crate::tui::inspector_items::InspectorTab;
 
 /// Bounding boxes of interactive viewports stored during render for mouse hit-testing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

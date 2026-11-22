@@ -8,8 +8,8 @@ use ratatui::widgets::{
     Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
+use crate::domain::InspectorTab;
 use crate::tui::app_state::{TuiAppState, UiMode};
-use crate::tui::inspector_items::InspectorTab;
 use crate::tui::render_dialogs::{
     render_confirm_empty_modal, render_confirm_secrets_modal, render_help_modal,
 };

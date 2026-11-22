@@ -1,8 +1,6 @@
-//! Pure metric rollups, token weight tiers, and inspector summary types.
+//! Pure metric rollups and token weight tiers for [`crate::domain::DirectoryTree`].
 
-use crate::domain::selection::{
-    FileDiscardReason, FolderSelectionState, PrunedDirReason, UnselectedReason,
-};
+use crate::domain::selection::FolderSelectionState;
 
 /// Upper token bound (exclusive) for the lightweight green weight tier.
 pub const LIGHT_TIER_MAX_TOKENS: usize = 2_000;
@@ -45,7 +43,7 @@ impl WeightTier {
 pub struct CategoryCounts {
     /// Readable text files currently selected for clipboard output.
     pub read_files: usize,
-    /// Readable text files currently unselected (ignored, oversized, or user-excluded).
+    /// Readable text files currently unselected (ignored, oversized, pruned, or user-excluded).
     pub unread_files: usize,
     /// Total discarded items (binary/corrupt/capped files plus pruned dependency dirs).
     pub discarded_items: usize,
@@ -112,42 +110,11 @@ impl NodeRollup {
     }
 }
 
-/// Category filter for the TUI inspector modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InspectorCategory {
-    /// Discarded files and pruned dependency/VCS directories.
-    Discarded,
-    /// Readable text files currently unselected.
-    Unread,
-}
-
-/// Explanation attached to an item displayed inside the TUI inspector modal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InspectorReason {
-    /// File excluded for the recorded non-text or cap reason.
-    DiscardedFile(FileDiscardReason),
-    /// Directory subtree pruned during scan.
-    PrunedDir(PrunedDirReason),
-    /// Text file omitted for the recorded selection reason.
-    UnreadFile(UnselectedReason),
-}
-
-/// Row rendered inside the Discarded / Unread inspector modal.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InspectorItem {
-    /// Normalized relative path inside the workspace.
-    pub rel_path: String,
-    /// Known token count (`0` for discarded items).
-    pub tokens: usize,
-    /// Specific reason explaining why the item belongs to this list.
-    pub reason: InspectorReason,
-}
-
 /// Full metric snapshot produced from a [`crate::domain::DirectoryTree`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeMetrics {
     /// Per-node rollups indexed directly by `NodeId::index()`.
     pub rollups: Vec<NodeRollup>,
-    /// Global counts for the footer status bar.
+    /// Global counts for the header/inspector status summaries.
     pub counts: CategoryCounts,
 }

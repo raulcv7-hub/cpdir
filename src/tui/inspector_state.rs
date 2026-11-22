@@ -1,10 +1,10 @@
 //! State and in-place actions for the unified Unread / Discarded / Secrets inspector modal.
 
-use crate::domain::{DirectoryTree, InspectorCategory, MergeSubtreeOutcome, TreeMetrics};
-use crate::tui::app_state::{ActiveModal, TuiAppState};
-use crate::tui::inspector_items::{
-    InspectorEntry, InspectorEntryKind, InspectorTab, collect_tab_entries,
+use crate::domain::{
+    DirectoryTree, InspectorEntry, InspectorEntryKind, InspectorTab, MergeSubtreeOutcome,
+    TreeMetrics,
 };
+use crate::tui::app_state::{ActiveModal, TuiAppState};
 
 /// Cached interactive state backing the unified inspector modal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,7 +22,7 @@ impl InspectorState {
     pub(crate) fn new(tree: &DirectoryTree, metrics: &TreeMetrics, tab: InspectorTab) -> Self {
         Self {
             tab,
-            entries: collect_tab_entries(tree, metrics, tab),
+            entries: tree.inspector_entries(metrics, tab),
             cursor: 0,
             scroll: 0,
             viewport_height: 14,
@@ -131,15 +131,6 @@ impl TuiAppState {
         let mut next = InspectorState::new(&self.tree, self.metrics(), tab);
         next.viewport_height = prev_vh;
         self.modal = ActiveModal::Inspector(next);
-    }
-
-    /// Opens the unified inspector overlay mapped from [`InspectorCategory`].
-    pub fn open_inspector(&mut self, category: InspectorCategory) {
-        let tab = match category {
-            InspectorCategory::Discarded => InspectorTab::Discarded,
-            InspectorCategory::Unread => InspectorTab::Unread,
-        };
-        self.open_inspector_tab(tab);
     }
 
     /// Cycles the active inspector tab forward (`forward = true`) or backward.
