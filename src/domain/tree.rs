@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::domain::selection::{FileDiscardReason, PrunedDirReason, SecretFinding, TextFileState};
+use crate::domain::findings::SecretFinding;
+use crate::domain::selection::{FileDiscardReason, PrunedDirReason, TextFileState};
 
 /// Typed handle referencing a node inside [`DirectoryTree`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::BuildHasher;
 
-use crate::domain::{DirectoryTree, NodeId, NodeKind};
-use crate::output::git_xml::{GitContextSnapshot, render_git_context};
+use crate::domain::{DirectoryTree, GitContextSnapshot, NodeId, NodeKind};
+use crate::output::git_xml::render_git_context;
 
 /// Errors prevented while assembling the final XML document.
 #[derive(Debug, Clone, PartialEq, Eq)]

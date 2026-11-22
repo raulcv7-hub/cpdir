@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::output::{
+use crate::domain::{
     GitCommitEntry, GitDiffNumstatEntry, GitDiffStat, GitHotspotEntry, GitTagEntry,
 };
 

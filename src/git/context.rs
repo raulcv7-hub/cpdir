@@ -2,14 +2,14 @@
 
 use std::path::Path;
 
+use crate::domain::{
+    GitCommitEntry, GitContextSnapshot, GitDiffNumstatEntry, GitHotspotEntry, GitTagEntry,
+};
 use crate::git::parser::{
     parse_branch_and_status, parse_diff_numstat, parse_hotspots, parse_recent_commits,
     parse_recent_tags,
 };
 use crate::git::runner::{GitAvailability, probe_work_tree, run_git_hardened};
-use crate::output::{
-    GitCommitEntry, GitContextSnapshot, GitDiffNumstatEntry, GitHotspotEntry, GitTagEntry,
-};
 
 const DEFAULT_MAX_COMMITS: usize = 15;
 const DEFAULT_MAX_COMMIT_BODY_CHARS: usize = 300;
