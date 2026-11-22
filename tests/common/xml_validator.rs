@@ -7,6 +7,17 @@ use quick_xml::escape::resolve_xml_entity;
 use quick_xml::events::{BytesEnd, BytesRef, BytesStart, Event};
 use quick_xml::reader::Reader;
 
+/// Metadata parsed from `<context_summary ... />`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedContextSummary {
+    pub(crate) root: String,
+    pub(crate) root_path: Option<String>,
+    pub(crate) included_files: usize,
+    pub(crate) unselected_files: usize,
+    pub(crate) discarded_files: usize,
+    pub(crate) pruned_dirs: Option<String>,
+}
+
 /// Extracted file entry parsed back from a strict `<cpdir_context>` XML document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsedXmlFile {
@@ -17,6 +28,7 @@ pub(crate) struct ParsedXmlFile {
 /// Structured representation of a validated `<cpdir_context>` XML payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsedCpdirXml {
+    pub(crate) context_summary: Option<ParsedContextSummary>,
     pub(crate) directory_structure: Option<String>,
     pub(crate) has_git_context: bool,
     pub(crate) files: Vec<ParsedXmlFile>,
@@ -45,6 +57,7 @@ pub(crate) fn parse_strict_xml(xml: &str) -> Result<ParsedCpdirXml, String> {
 struct XmlParseState {
     stack: Vec<String>,
     saw_root: bool,
+    context_summary: Option<ParsedContextSummary>,
     directory_structure: Option<String>,
     has_git_context: bool,
     files: Vec<ParsedXmlFile>,
@@ -87,6 +100,7 @@ impl XmlParseState {
             return Err(format!("unexpected nested tag <{name}> inside <file>"));
         }
         match name.as_str() {
+            "context_summary" => self.context_summary = Some(parse_context_summary(tag)?),
             "directory_structure" => self.active_dir_tree = Some(String::new()),
             "git_context" => self.has_git_context = true,
             "file" => {
@@ -106,6 +120,7 @@ impl XmlParseState {
             return Err(format!("unexpected empty tag <{name}/> inside <file>"));
         }
         match name {
+            "context_summary" => self.context_summary = Some(parse_context_summary(tag)?),
             "file" => {
                 let path = extract_required_attr(tag, "path")?;
                 self.files.push(ParsedXmlFile {
@@ -156,6 +171,7 @@ impl XmlParseState {
             return Err(format!("unclosed xml elements remaining: {:?}", self.stack));
         }
         Ok(ParsedCpdirXml {
+            context_summary: self.context_summary,
             directory_structure: self.directory_structure,
             has_git_context: self.has_git_context,
             files: self.files,
@@ -163,21 +179,46 @@ impl XmlParseState {
     }
 }
 
+fn parse_context_summary(tag: &BytesStart<'_>) -> Result<ParsedContextSummary, String> {
+    Ok(ParsedContextSummary {
+        root: extract_required_attr(tag, "root")?,
+        root_path: extract_optional_attr(tag, "root_path")?,
+        included_files: parse_usize_attr(tag, "included_files")?,
+        unselected_files: parse_usize_attr(tag, "unselected_files")?,
+        discarded_files: parse_usize_attr(tag, "discarded_files")?,
+        pruned_dirs: extract_optional_attr(tag, "pruned_dirs")?,
+    })
+}
+
+fn parse_usize_attr(tag: &BytesStart<'_>, key: &str) -> Result<usize, String> {
+    let raw = extract_required_attr(tag, key)?;
+    raw.parse::<usize>()
+        .map_err(|err| format!("invalid integer attribute '{key}'='{raw}': {err}"))
+}
+
 fn extract_required_attr(tag: &BytesStart<'_>, key: &str) -> Result<String, String> {
-    for attr_res in tag.attributes() {
-        let attr = attr_res.map_err(|err| format!("invalid xml attribute: {err}"))?;
-        if attr.key.as_ref() == key {
-            return attr
-                .normalized_value(XmlVersion::Implicit1_0)
-                .map(Cow::into_owned)
-                .map_err(|err| format!("failed to decode attribute {key}: {err}"));
-        }
+    if let Some(val) = extract_optional_attr(tag, key)? {
+        return Ok(val);
     }
     let qname = tag.name();
     let tag_name = qname.as_ref();
     Err(format!(
         "missing required attribute '{key}' on <{tag_name}>"
     ))
+}
+
+fn extract_optional_attr(tag: &BytesStart<'_>, key: &str) -> Result<Option<String>, String> {
+    for attr_res in tag.attributes() {
+        let attr = attr_res.map_err(|err| format!("invalid xml attribute: {err}"))?;
+        if attr.key.as_ref() == key {
+            let val = attr
+                .normalized_value(XmlVersion::Implicit1_0)
+                .map(Cow::into_owned)
+                .map_err(|err| format!("failed to decode attribute {key}: {err}"))?;
+            return Ok(Some(val));
+        }
+    }
+    Ok(None)
 }
 
 fn resolve_entity_ref(entity: &BytesRef<'_>) -> Result<String, String> {

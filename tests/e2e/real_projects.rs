@@ -73,7 +73,11 @@ fn self_host_scan_of_cpdir_repo_succeeds_with_clean_src_and_git_context() {
     let copied = clip.copied.borrow();
     let parsed = parse_strict_xml(&copied[0]).expect("self-host xml parses strictly");
     let dir_tree = parsed.directory_structure.as_deref().expect("dir tree");
-    assert!(!dir_tree.contains("    target/"));
+    assert!(
+        !dir_tree
+            .lines()
+            .any(|l| l.trim_start().starts_with("target/"))
+    );
     assert!(
         parsed
             .files
@@ -116,8 +120,14 @@ fn monorepo_rust_and_nextjs_fixture_prunes_deps_and_rescues_env_local() {
 
     let xml = render_strict_xml(&scan.tree, &scan.contents, None).expect("xml");
     let parsed = parse_strict_xml(&xml).expect("valid xml");
-    assert!(!xml.contains("node_modules"));
-    assert!(!xml.contains(".next"));
+    let summary = parsed.context_summary.expect("context_summary");
+    assert_eq!(
+        summary.pruned_dirs.as_deref(),
+        Some("apps/web/.next, apps/web/node_modules")
+    );
+    let dir_tree = parsed.directory_structure.as_deref().expect("dir tree");
+    assert!(!dir_tree.contains("node_modules"));
+    assert!(!dir_tree.contains(".next"));
     assert!(
         parsed
             .files
@@ -183,6 +193,10 @@ fn python_ml_and_go_cpp_bom_fixtures_enforce_thresholds_and_contextual_pruning()
 
     let xml = render_strict_xml(state.tree(), &contents, None).expect("xml");
     let parsed = parse_strict_xml(&xml).expect("valid xml");
+    let dir_tree = parsed.directory_structure.as_deref().expect("dir tree");
+    assert!(dir_tree.contains("big_dataset.csv [>5MB]"));
+    assert!(dir_tree.contains("train.ipynb [unselected: >50k]"));
+    assert!(dir_tree.contains("vendor/pkg/mod.go [unselected: pruned]"));
     let paths: Vec<String> = parsed.files.into_iter().map(|f| f.path).collect();
     assert_eq!(
         paths,

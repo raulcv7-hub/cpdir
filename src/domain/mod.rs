@@ -22,7 +22,7 @@ pub use git_snapshot::{
 };
 pub use inspector::{InspectorEntry, InspectorEntryKind, InspectorTab};
 pub use merge::MergeSubtreeOutcome;
-pub use metrics::{CategoryCounts, NodeRollup, TreeMetrics, WeightTier};
+pub use metrics::{CategoryCounts, NodeRollup, TreeMetrics, WeightTier, format_token_count};
 pub use node::{DirectoryData, NodeId, NodeKind, PrunedDir, TextFileData, TreeError, TreeNode};
 pub use selection::{
     FileDiscardReason, FolderSelectionState, NaturalExclusion, NaturalSelection, PrunedDirReason,

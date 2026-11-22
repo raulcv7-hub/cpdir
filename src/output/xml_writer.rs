@@ -1,4 +1,4 @@
-//! Strict XML 1.0 document assembly for directory structure, git context, and selected files.
+//! Strict XML 1.0 document assembly for summary, directory structure, git context, and files.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -6,6 +6,7 @@ use std::hash::BuildHasher;
 
 use crate::domain::{DirectoryTree, GitContextSnapshot, NodeId, NodeKind};
 use crate::output::git_xml::render_git_context;
+use crate::output::summary_xml::{XmlRenderOptions, render_xml_header_sections};
 use crate::output::xml_escape::{push_escaped_xml_attr, push_escaped_xml_text};
 
 /// Errors prevented while assembling the final XML document.
@@ -44,15 +45,34 @@ pub fn render_strict_xml<S: BuildHasher>(
     contents: &HashMap<NodeId, String, S>,
     git_context: Option<&GitContextSnapshot>,
 ) -> Result<String, XmlWriteError> {
+    render_strict_xml_with_options(
+        tree,
+        contents,
+        XmlRenderOptions {
+            git_context,
+            abs_root_path: None,
+        },
+    )
+}
+
+/// Renders the entire `DirectoryTree`, configured metadata options, and selected files into XML 1.0.
+///
+/// # Errors
+///
+/// Returns [`XmlWriteError::MissingFileContent`] if any selected [`NodeKind::TextFile`] lacks
+/// an entry in `contents`.
+pub fn render_strict_xml_with_options<S: BuildHasher>(
+    tree: &DirectoryTree,
+    contents: &HashMap<NodeId, String, S>,
+    options: XmlRenderOptions<'_>,
+) -> Result<String, XmlWriteError> {
     let estimated_bytes = estimate_output_bytes(tree);
     let mut xml = String::with_capacity(estimated_bytes);
 
     xml.push_str("<cpdir_context>\n");
-    xml.push_str("  <directory_structure>\n");
-    render_directory_structure(tree, &mut xml);
-    xml.push_str("  </directory_structure>\n");
+    render_xml_header_sections(tree, options.abs_root_path, &mut xml);
 
-    if let Some(git) = git_context {
+    if let Some(git) = options.git_context {
         render_git_context(git, &mut xml);
     }
 
@@ -76,22 +96,6 @@ fn estimate_output_bytes(tree: &DirectoryTree) -> usize {
         })
         .sum();
     payload_sum.saturating_add(4_096)
-}
-
-fn render_directory_structure(tree: &DirectoryTree, out: &mut String) {
-    let mut stack = vec![(DirectoryTree::ROOT, 2usize)];
-    while let Some((node_id, indent)) = stack.pop() {
-        let node = &tree.nodes()[node_id.index()];
-        push_indent(out, indent);
-        push_escaped_xml_text(out, &node.name);
-        if let NodeKind::Directory(dir) = &node.kind {
-            out.push('/');
-            for &child in dir.children.iter().rev() {
-                stack.push((child, indent + 1));
-            }
-        }
-        out.push('\n');
-    }
 }
 
 fn render_selected_files<S: BuildHasher>(
@@ -124,10 +128,4 @@ fn render_selected_files<S: BuildHasher>(
         }
     }
     Ok(())
-}
-
-fn push_indent(out: &mut String, levels: usize) {
-    for _ in 0..levels {
-        out.push_str("  ");
-    }
 }

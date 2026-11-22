@@ -13,7 +13,16 @@ use cpdir::output::render_strict_xml;
 use cpdir::scanner::{ReadFileOutcome, read_bounded_utf8};
 
 use crate::common::workspace::{WorkspaceBuilder, sample_png_bytes};
-use crate::common::xml_validator::{ParsedXmlFile, parse_strict_xml};
+use crate::common::xml_validator::{ParsedContextSummary, ParsedXmlFile, parse_strict_xml};
+
+struct GoldenFixture {
+    _ws: WorkspaceBuilder,
+    tree: DirectoryTree,
+    contents: HashMap<NodeId, String>,
+    odd_body: String,
+    helper_body: String,
+    main_body: String,
+}
 
 fn ingest_text(path: &Path) -> (u64, String) {
     match read_bounded_utf8(path, HARD_READ_BYTE_CAP) {
@@ -42,16 +51,16 @@ fn add_selected(
     .expect("valid text entry")
 }
 
-#[test]
-fn golden_workspace_preserves_collapsed_tree_empty_dirs_binaries_and_literal_xml() {
+fn build_golden_workspace_fixture() -> GoldenFixture {
     let ws = WorkspaceBuilder::new();
-    let main_body = "fn main() {\r\n    let x = \"a < b && c > d ]]> </file>\";\r\n}\r\n";
-    let helper_body = "pub fn helper() -> &'static str { \"🚀 &amp; literal\" }\n";
-    let odd_body = "  leading spaces and no trailing newline";
+    let main_body =
+        "fn main() {\r\n    let x = \"a < b && c > d ]]> </file>\";\r\n}\r\n".to_owned();
+    let helper_body = "pub fn helper() -> &'static str { \"🚀 &amp; literal\" }\n".to_owned();
+    let odd_body = "  leading spaces and no trailing newline".to_owned();
 
-    let p_main = ws.write_text("src/main.rs", main_body);
-    let p_helper = ws.write_text("src/collapsed/helper.rs", helper_body);
-    let p_odd = ws.write_text("docs/a & b.txt", odd_body);
+    let p_main = ws.write_text("src/main.rs", &main_body);
+    let p_helper = ws.write_text("src/collapsed/helper.rs", &helper_body);
+    let p_odd = ws.write_text("docs/a & b.txt", &odd_body);
     let p_empty = ws.write_bytes("empty.txt", &[]);
     let p_env = ws.write_text("src/.env", "API_KEY=secret\n");
     let _p_png = ws.write_bytes("assets/logo.png", &sample_png_bytes());
@@ -108,41 +117,63 @@ fn golden_workspace_preserves_collapsed_tree_empty_dirs_binaries_and_literal_xml
         (id_empty, empty_text),
     ]);
 
-    let xml = render_strict_xml(&tree, &contents, None).expect("xml render succeeds");
+    GoldenFixture {
+        _ws: ws,
+        tree,
+        contents,
+        odd_body,
+        helper_body,
+        main_body,
+    }
+}
+
+#[test]
+fn golden_workspace_preserves_stacked_paths_empty_dirs_badges_and_literal_xml() {
+    let f = build_golden_workspace_fixture();
+    let xml = render_strict_xml(&f.tree, &f.contents, None).expect("xml render succeeds");
     let parsed = parse_strict_xml(&xml).expect("strict xml must parse cleanly");
+
     assert_eq!(
-        parsed.directory_structure.as_deref(),
-        Some(concat!(
-            "\n    my_repo/\n",
-            "      assets/\n",
-            "        logo.png\n",
-            "      docs/\n",
-            "        a & b.txt\n",
-            "      empty_dir/\n",
-            "      src/\n",
-            "        collapsed/\n",
-            "          helper.rs\n",
-            "        .env\n",
-            "        main.rs\n",
-            "      empty.txt\n",
-            "  ",
-        ))
+        parsed.context_summary,
+        Some(ParsedContextSummary {
+            root: "my_repo".to_owned(),
+            root_path: None,
+            included_files: 4,
+            unselected_files: 1,
+            discarded_files: 1,
+            pruned_dirs: Some("node_modules".to_owned()),
+        })
     );
+    let dir_tree = parsed.directory_structure.as_deref().expect("dir tree");
+    assert_eq!(
+        dir_tree,
+        concat!(
+            "\n    assets/logo.png [binary]\n",
+            "    docs/a & b.txt\n",
+            "    empty_dir/\n",
+            "    src/collapsed/helper.rs\n",
+            "    src/.env [unselected: .gitignore] (5) [!]\n",
+            "    src/main.rs\n",
+            "    empty.txt\n",
+            "  ",
+        )
+    );
+    assert!(!dir_tree.contains("node_modules"));
     assert!(!parsed.has_git_context);
     assert_eq!(
         parsed.files,
         vec![
             ParsedXmlFile {
                 path: "docs/a & b.txt".to_owned(),
-                content: odd_body.to_owned(),
+                content: f.odd_body,
             },
             ParsedXmlFile {
                 path: "src/collapsed/helper.rs".to_owned(),
-                content: helper_body.to_owned(),
+                content: f.helper_body,
             },
             ParsedXmlFile {
                 path: "src/main.rs".to_owned(),
-                content: main_body.to_owned(),
+                content: f.main_body,
             },
             ParsedXmlFile {
                 path: "empty.txt".to_owned(),
@@ -150,8 +181,101 @@ fn golden_workspace_preserves_collapsed_tree_empty_dirs_binaries_and_literal_xml
             },
         ]
     );
-    assert!(!xml.contains("node_modules"));
     assert!(!xml.contains("API_KEY=secret"));
+}
+
+#[test]
+fn golden_summary_caps_pruned_dirs_and_renders_all_discard_and_unselected_badges() {
+    let mut tree = DirectoryTree::new("badges_repo");
+    for idx in 0..14 {
+        tree.record_pruned_dir(
+            format!("pkg_{idx}/node_modules"),
+            PrunedDirReason::DependencyOrVcs,
+        );
+    }
+
+    tree.add_discarded_file(DirectoryTree::ROOT, "blob.bin", FileDiscardReason::Binary)
+        .expect("bin");
+    tree.add_discarded_file(
+        DirectoryTree::ROOT,
+        "broken.txt",
+        FileDiscardReason::InvalidUtf8,
+    )
+    .expect("utf8");
+    tree.add_discarded_file(
+        DirectoryTree::ROOT,
+        "dump.csv",
+        FileDiscardReason::ExceedsHardCap {
+            byte_len: 6_000_000,
+        },
+    )
+    .expect("cap");
+    tree.add_discarded_file(
+        DirectoryTree::ROOT,
+        "locked.dat",
+        FileDiscardReason::Unreadable,
+    )
+    .expect("unreadable");
+
+    let mut off_state = TextFileState::new(NaturalSelection::Included);
+    off_state.set_selected(false);
+    let mut contents = HashMap::new();
+    let entries = [
+        ("user_off.rs", off_state, 42),
+        (
+            "dot_ign.log",
+            TextFileState::new(NaturalSelection::Excluded(NaturalExclusion::DotIgnore)),
+            120,
+        ),
+        (
+            "big.json",
+            TextFileState::new(NaturalSelection::Excluded(
+                NaturalExclusion::ExceedsTokenThreshold,
+            )),
+            55_200,
+        ),
+        (
+            "pruned_dep.js",
+            TextFileState::new(NaturalSelection::Excluded(NaturalExclusion::Pruned)),
+            0,
+        ),
+    ];
+    for (name, state, tokens) in entries {
+        let id = tree
+            .add_text_file(
+                DirectoryTree::ROOT,
+                name,
+                TextFileData {
+                    byte_len: 10,
+                    tokens,
+                    secret_hits: 0,
+                    state,
+                },
+            )
+            .expect("add text");
+        contents.insert(id, String::new());
+    }
+
+    let xml = render_strict_xml(&tree, &contents, None).expect("xml");
+    let parsed = parse_strict_xml(&xml).expect("valid xml");
+    let summary = parsed.context_summary.expect("summary");
+    assert_eq!(summary.included_files, 0);
+    assert_eq!(summary.unselected_files, 4);
+    assert_eq!(summary.discarded_files, 4);
+    let pruned = summary.pruned_dirs.expect("pruned_dirs");
+    assert!(pruned.ends_with(", ... (+2 more)"));
+    assert!(pruned.contains("pkg_11/node_modules"));
+    assert!(!pruned.contains("pkg_12/node_modules"));
+
+    let dir_tree = parsed.directory_structure.expect("dir_tree");
+    assert!(dir_tree.contains("blob.bin [binary]"));
+    assert!(dir_tree.contains("broken.txt [UTF8]"));
+    assert!(dir_tree.contains("dump.csv [>5MB]"));
+    assert!(dir_tree.contains("locked.dat [unreadable]"));
+    assert!(dir_tree.contains("user_off.rs [unselected: off] (42)"));
+    assert!(dir_tree.contains("dot_ign.log [unselected: .ignore] (120)"));
+    assert!(dir_tree.contains("big.json [unselected: >50k] (55.2k)"));
+    assert!(dir_tree.contains("pruned_dep.js [unselected: pruned] (0)"));
 }
 
 #[test]
@@ -192,6 +316,18 @@ fn golden_git_context_escapes_hostile_xml_and_handles_empty_sections() {
 
     let xml = render_strict_xml(&tree, &contents, Some(&git)).expect("render with git");
     let parsed = parse_strict_xml(&xml).expect("git xml parses cleanly");
+    assert_eq!(
+        parsed.context_summary,
+        Some(ParsedContextSummary {
+            root: "repo".to_owned(),
+            root_path: None,
+            included_files: 0,
+            unselected_files: 0,
+            discarded_files: 0,
+            pruned_dirs: None,
+        })
+    );
+    assert_eq!(parsed.directory_structure.as_deref(), Some(""));
     assert!(parsed.has_git_context);
     assert_eq!(parsed.files, vec![]);
     assert!(xml.contains("<branch>feat/a&amp;b&lt;c&gt;</branch>"));

@@ -118,3 +118,19 @@ pub struct TreeMetrics {
     /// Global counts for the header/inspector status summaries.
     pub counts: CategoryCounts,
 }
+
+/// Formats token counts compactly using integer math (e.g. `420`, `12.4k`, `1.2M`).
+#[must_use]
+pub fn format_token_count(tokens: usize) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+    if tokens < 1_000_000 {
+        let whole = tokens / 1_000;
+        let tenths = (tokens % 1_000) / 100;
+        return format!("{whole}.{tenths}k");
+    }
+    let millions = tokens / 1_000_000;
+    let tenths = (tokens % 1_000_000) / 100_000;
+    format!("{millions}.{tenths}M")
+}

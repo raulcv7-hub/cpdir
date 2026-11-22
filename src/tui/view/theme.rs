@@ -2,6 +2,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
+pub use crate::domain::format_token_count;
 use crate::domain::{SecretRuleKind, WeightTier};
 
 /// Typed visual category preventing boolean parameter confusion when styling tree rows.
@@ -123,22 +124,6 @@ pub const fn secret_rule_label(rule: SecretRuleKind) -> &'static str {
         SecretRuleKind::JwtToken => "JwtToken",
         SecretRuleKind::HardcodedSecret => "HardcodedSecret",
     }
-}
-
-/// Formats token counts compactly using integer math (e.g. `420`, `12.4k`, `1.2M`).
-#[must_use]
-pub fn format_token_count(tokens: usize) -> String {
-    if tokens < 1_000 {
-        return tokens.to_string();
-    }
-    if tokens < 1_000_000 {
-        let whole = tokens / 1_000;
-        let tenths = (tokens % 1_000) / 100;
-        return format!("{whole}.{tenths}k");
-    }
-    let millions = tokens / 1_000_000;
-    let tenths = (tokens % 1_000_000) / 100_000;
-    format!("{millions}.{tenths}M")
 }
 
 /// Strips control characters and Unicode Bidi overrides from filenames before terminal rendering.

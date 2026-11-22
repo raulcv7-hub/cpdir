@@ -155,6 +155,8 @@ proptest! {
         let mut contents = HashMap::new();
         let mut expected_selected_paths = Vec::new();
         let mut all_names = Vec::new();
+        let mut expected_unselected = 0usize;
+        let mut expected_discarded = 0usize;
 
         for (idx, (dir_expanded, is_selected, is_discarded)) in flags.into_iter().enumerate() {
             let dir_name = format!("dir_{idx}");
@@ -169,6 +171,7 @@ proptest! {
             if is_discarded {
                 tree.add_discarded_file(dir_id, &file_name, FileDiscardReason::Binary)
                     .expect("bin");
+                expected_discarded += 1;
             } else {
                 let nat = if is_selected {
                     NaturalSelection::Included
@@ -190,14 +193,20 @@ proptest! {
                 contents.insert(fid, format!("// {idx}\n"));
                 if is_selected {
                     expected_selected_paths.push(format!("{dir_name}/{file_name}"));
+                } else {
+                    expected_unselected += 1;
                 }
             }
         }
 
         let xml = render_strict_xml(&tree, &contents, None).expect("xml write");
         let parsed = parse_strict_xml(&xml).map_err(TestCaseError::fail)?;
-        let dir_tree = parsed.directory_structure.expect("directory_structure present");
+        let summary = parsed.context_summary.expect("context_summary present");
+        prop_assert_eq!(summary.included_files, expected_selected_paths.len());
+        prop_assert_eq!(summary.unselected_files, expected_unselected);
+        prop_assert_eq!(summary.discarded_files, expected_discarded);
 
+        let dir_tree = parsed.directory_structure.expect("directory_structure present");
         for name in all_names {
             prop_assert!(dir_tree.contains(&name), "missing {name} in directory_structure");
         }

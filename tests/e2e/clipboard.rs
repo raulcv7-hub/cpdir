@@ -73,12 +73,17 @@ fn full_scan_tokenize_xml_pipeline_writes_win32_clipboard_cleanly() {
 
     let clipboard_text = read_clipboard_with_retry();
     let parsed = parse_strict_xml(&clipboard_text).expect("clipboard xml must be valid");
-    let dir_tree = parsed.directory_structure.expect("directory_structure");
+    let summary = parsed.context_summary.expect("context_summary");
+    assert_eq!(summary.included_files, 3);
+    assert_eq!(summary.unselected_files, 0);
+    assert_eq!(summary.discarded_files, 2);
+    assert_eq!(summary.pruned_dirs.as_deref(), Some("node_modules"));
 
+    let dir_tree = parsed.directory_structure.expect("directory_structure");
     assert!(dir_tree.contains("sub_empty/"));
-    assert!(dir_tree.contains("fake.ts"));
-    assert!(dir_tree.contains("broken.txt"));
-    assert!(!clipboard_text.contains("node_modules"));
+    assert!(dir_tree.contains("fake.ts [binary]"));
+    assert!(dir_tree.contains("broken.txt [UTF8]"));
+    assert!(!dir_tree.contains("node_modules"));
 
     assert_eq!(
         parsed.files,

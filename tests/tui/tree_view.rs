@@ -77,11 +77,18 @@ fn tui_tree_workflow_verifies_colors_folding_release_guard_and_final_xml() {
 
     let xml = render_strict_xml(&state.into_tree(), &scan.contents, None).expect("xml");
     let parsed = parse_strict_xml(&xml).expect("valid xml");
-    let dir_tree = parsed.directory_structure.expect("directory_structure");
+    let summary = parsed.context_summary.expect("context_summary");
+    assert_eq!(summary.included_files, 1);
+    assert_eq!(summary.unselected_files, 4);
+    assert_eq!(summary.discarded_files, 1);
+    assert_eq!(summary.pruned_dirs.as_deref(), Some("node_modules"));
 
-    assert!(dir_tree.contains("helper.rs"));
+    let dir_tree = parsed.directory_structure.expect("directory_structure");
+    assert!(dir_tree.contains("src/utils/helper.rs [unselected: off]"));
+    assert!(dir_tree.contains("assets/logo.png [binary]"));
+    assert!(dir_tree.contains("data/big_53k.json [unselected: >50k]"));
     assert!(dir_tree.contains("empty_dir/"));
-    assert!(dir_tree.contains("secret.log"));
+    assert!(dir_tree.contains("ignored/secret.log [unselected: .gitignore]"));
     let emitted: Vec<String> = parsed.files.into_iter().map(|f| f.path).collect();
     assert_eq!(emitted, vec![".gitignore"]);
 }

@@ -115,10 +115,16 @@ fn stress_750k_tokens_full_pipeline_tui_reingest_and_strict_xml() {
             .iter()
             .all(|f| !f.path.starts_with("target/") && !f.path.starts_with("node_modules/"))
     );
+    let summary = parsed.context_summary.expect("context_summary");
+    assert_eq!(summary.pruned_dirs.as_deref(), Some(".git, node_modules"));
+    assert_eq!(summary.discarded_files, 2);
+
     let dir_tree = parsed.directory_structure.as_deref().expect("dir tree");
-    assert!(dir_tree.contains("target/"));
+    assert!(dir_tree.contains("target/debug/deps/obj_0.js [unselected: .gitignore]"));
+    assert!(dir_tree.contains("cfg/.env [unselected: .gitignore]"));
+    assert!(dir_tree.contains("data/dump_55k.json [unselected: >50k]"));
+    assert!(!dir_tree.contains("node_modules/heavy"));
     assert!(!dir_tree.contains("node_modules"));
-    assert!(!dir_tree.contains("heavy"));
     assert!(!copied[0].contains(&["AKIA", "1234567890ABCDEF"].concat()));
 }
 

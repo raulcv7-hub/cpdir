@@ -109,22 +109,30 @@ fn golden_multilevel_ignore_precedence_pruning_and_xml_emission() {
 
     let xml = render_strict_xml(&scan.tree, &scan.contents, None).expect("xml write");
     let parsed = parse_strict_xml(&xml).expect("strict xml must parse");
-    let dir_tree = parsed.directory_structure.expect("directory_structure");
+    let summary = parsed.context_summary.expect("context_summary");
+    assert_eq!(summary.included_files, 10);
+    assert_eq!(summary.unselected_files, 6);
+    assert_eq!(summary.discarded_files, 2);
+    assert_eq!(
+        summary.pruned_dirs.as_deref(),
+        Some(".git, node_modules, services/rust_svc/target")
+    );
 
+    let dir_tree = parsed.directory_structure.expect("directory_structure");
     for expected_entry in [
         "empty_top/",
-        "empty_nested/",
-        "logo.png",
-        "bad.txt",
-        "drop.log",
+        "src/empty_nested/",
+        "assets/logo.png [binary]",
+        "src/bad.txt [UTF8]",
+        "logs/drop.log [unselected: .gitignore]",
     ] {
         assert!(
             dir_tree.contains(expected_entry),
             "missing {expected_entry} in directory_structure"
         );
     }
-    assert!(!xml.contains("node_modules"));
-    assert!(!xml.contains("services/rust_svc/target"));
+    assert!(!dir_tree.contains("node_modules"));
+    assert!(!dir_tree.contains("services/rust_svc/target"));
 
     let emitted_paths: Vec<String> = parsed.files.iter().map(|f| f.path.clone()).collect();
     assert_eq!(
@@ -165,8 +173,16 @@ fn preserves_source_nested_build_and_vendor_while_pruning_package_outputs() {
         emitted,
         vec!["internal/vendor/helper.go", "src/build/gen.rs"]
     );
-    assert!(!xml.contains("apps/web/dist"));
-    assert!(!xml.contains("infra/.terraform"));
+    let dir_tree = parsed.directory_structure.as_deref().expect("dir tree");
+    let summary = parsed.context_summary.expect("context_summary");
+    assert!(!dir_tree.contains("apps/web/dist"));
+    assert!(!dir_tree.contains("infra/.terraform"));
+    assert!(dir_tree.contains("apps/web/"));
+    assert!(dir_tree.contains("infra/"));
+    assert_eq!(
+        summary.pruned_dirs.as_deref(),
+        Some("apps/web/dist, infra/.terraform")
+    );
 
     if cfg!(windows) {
         assert_eq!(resolve_root_name(Path::new(r"C:\")), "C:");
