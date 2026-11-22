@@ -44,6 +44,7 @@ fn handle_tree_key(state: &mut TuiAppState, code: KeyCode) {
         KeyCode::Char('a' | 'A') => state.toggle_all_selection(),
         KeyCode::Char('u' | 'U') => state.unselect_all(),
         KeyCode::Char('g' | 'G') => state.toggle_git_context(),
+        KeyCode::Char('p' | 'P') => state.toggle_abs_path(),
         KeyCode::Char('i' | 'I' | 'n' | 'N') => state.open_inspector_tab(InspectorTab::Unread),
         KeyCode::Char('d' | 'D') => state.open_inspector_tab(InspectorTab::Discarded),
         KeyCode::Char('s' | 'S') => state.open_inspector_tab(InspectorTab::Secrets),

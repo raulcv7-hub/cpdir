@@ -11,6 +11,8 @@ pub enum CliCommand {
     Run {
         /// Target workspace directory to inspect and copy.
         target_dir: PathBuf,
+        /// Whether to include the normalized `root_path` attribute inside `<context_summary>`.
+        include_abs_path: bool,
     },
     /// Display concise usage instructions.
     Help,
@@ -55,6 +57,7 @@ where
     let mut iter = args.into_iter();
     let _program = iter.next();
     let mut target_dir: Option<PathBuf> = None;
+    let mut include_abs_path = false;
     let mut end_of_flags = false;
 
     for raw in iter {
@@ -63,6 +66,10 @@ where
             match s {
                 "-h" | "--help" => return Ok(CliCommand::Help),
                 "-V" | "--version" => return Ok(CliCommand::Version),
+                "--abs-path" => {
+                    include_abs_path = true;
+                    continue;
+                }
                 "--" => {
                     end_of_flags = true;
                     continue;
@@ -87,6 +94,7 @@ where
 
     Ok(CliCommand::Run {
         target_dir: target_dir.unwrap_or_else(|| PathBuf::from(".")),
+        include_abs_path,
     })
 }
 
@@ -126,9 +134,11 @@ pub const fn usage_text() -> &'static str {
     concat!(
         "cpdir - copy directory XML context to the Windows clipboard\n\n",
         "USAGE:\n",
-        "  cpdir [DIRECTORY]\n",
+        "  cpdir [OPTIONS] [DIRECTORY]\n",
         "  cpdir [-h | --help]\n",
-        "  cpdir [-V | --version]\n",
+        "  cpdir [-V | --version]\n\n",
+        "OPTIONS:\n",
+        "      --abs-path    Include normalized absolute root_path in <context_summary>\n",
     )
 }
 

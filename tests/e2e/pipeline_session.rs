@@ -38,6 +38,7 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
 
     assert!(state.has_git_context());
     assert!(state.git_context_tokens() > 0);
+    assert!(!state.include_abs_path());
     assert_eq!(state.metrics().counts.read_files, 2);
 
     state.open_inspector_tab(InspectorTab::Discarded);
@@ -70,19 +71,49 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
     assert_eq!(copied.len(), 1);
     let parsed = parse_strict_xml(&copied[0]).expect("valid strict xml");
     assert!(!parsed.has_git_context);
+    assert_eq!(
+        parsed.context_summary.expect("summary").root_path,
+        None,
+        "root_path must be omitted by default"
+    );
     let paths: Vec<String> = parsed.files.into_iter().map(|f| f.path).collect();
     assert_eq!(paths, vec!["src/main.rs", "vendor/dep.rs", ".gitignore"]);
 
     ws.write_text("src/added.rs", "pub fn added() {}\n");
-    let (_session2, state2) = WorkspaceSession::open(
+    let (mut session2, mut state2) = WorkspaceSession::open(
         ws.root(),
-        store,
+        store.clone(),
         ScanConfig::default(),
         GitContextConfig::default(),
     )
     .expect("reopen workspace");
     assert!(!state2.include_git_context());
+    assert!(!state2.include_abs_path());
     assert_eq!(state2.metrics().counts.read_files, 3);
+
+    state2.set_include_abs_path(true);
+    state2.request_copy();
+    let clip2 = RecordingClipboard::default();
+    session2
+        .export_clipboard(state2, &clip2)
+        .expect("export with abs path");
+    let parsed2 = parse_strict_xml(&clip2.copied.borrow()[0]).expect("valid xml 2");
+    let expected_abs = session2.display_abs_path();
+    assert!(!expected_abs.starts_with(r"\\?\"));
+    assert_eq!(
+        parsed2.context_summary.expect("summary 2").root_path,
+        Some(expected_abs.to_owned())
+    );
+
+    // Confirm abs_path remains ephemeral and never persists across sessions.
+    let (_session3, state3) = WorkspaceSession::open(
+        ws.root(),
+        store,
+        ScanConfig::default(),
+        GitContextConfig::default(),
+    )
+    .expect("reopen workspace 3");
+    assert!(!state3.include_abs_path());
 }
 
 #[test]

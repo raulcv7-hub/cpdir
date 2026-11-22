@@ -118,19 +118,24 @@ impl MemoryStore {
     }
 }
 
+/// Resolves a canonicalized display path preserving casing while stripping Windows `\\?\` prefixes.
+#[must_use]
+pub fn resolve_display_abs_path(target_dir: &Path) -> String {
+    let resolved = fs::canonicalize(target_dir).unwrap_or_else(|_| target_dir.to_path_buf());
+    let raw = resolved.to_string_lossy();
+    raw.strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .or_else(|| raw.strip_prefix(r"\\?\").map(str::to_owned))
+        .unwrap_or_else(|| raw.into_owned())
+}
+
 /// Normalizes a workspace path consistently across Explorer, PowerShell, and `cmd` invocations.
 #[must_use]
 pub fn normalize_dir_for_hash(target_dir: &Path) -> String {
-    let resolved = fs::canonicalize(target_dir).unwrap_or_else(|_| target_dir.to_path_buf());
-    let raw = resolved.to_string_lossy();
-    let stripped = raw
-        .strip_prefix(r"\\?\UNC\")
-        .map(|rest| format!(r"\\{rest}"))
-        .or_else(|| raw.strip_prefix(r"\\?\").map(str::to_owned))
-        .unwrap_or_else(|| raw.into_owned());
+    let display = resolve_display_abs_path(target_dir);
     if cfg!(windows) {
-        stripped.to_ascii_lowercase()
+        display.to_ascii_lowercase()
     } else {
-        stripped
+        display
     }
 }

@@ -1,10 +1,11 @@
-//! Encapsulated Git context toggle and token accounting state for [`crate::tui::TuiAppState`].
+//! Encapsulated context toggles and token accounting state for [`crate::tui::TuiAppState`].
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ContextTokenState {
     has_git_context: bool,
     include_git_context: bool,
     git_context_tokens: usize,
+    include_abs_path: bool,
 }
 
 impl ContextTokenState {
@@ -13,6 +14,7 @@ impl ContextTokenState {
             has_git_context,
             include_git_context: has_git_context,
             git_context_tokens: 0,
+            include_abs_path: false,
         }
     }
 
@@ -50,5 +52,17 @@ impl ContextTokenState {
         if self.has_git_context {
             self.include_git_context = !self.include_git_context;
         }
+    }
+
+    pub(super) const fn include_abs_path(self) -> bool {
+        self.include_abs_path
+    }
+
+    pub(super) const fn set_include_abs_path(&mut self, enabled: bool) {
+        self.include_abs_path = enabled;
+    }
+
+    pub(super) const fn toggle_abs_path(&mut self) {
+        self.include_abs_path = !self.include_abs_path;
     }
 }

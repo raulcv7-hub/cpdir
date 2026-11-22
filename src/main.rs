@@ -26,7 +26,10 @@ fn main() -> ExitCode {
             eprintln!("cpdir {}", package_version());
             ExitCode::SUCCESS
         }
-        CliCommand::Run { target_dir } => match run_interactive(&target_dir, &SystemClipboard) {
+        CliCommand::Run {
+            target_dir,
+            include_abs_path,
+        } => match run_interactive(&target_dir, include_abs_path, &SystemClipboard) {
             Ok(RunOutcome::Copied {
                 files,
                 tokens,

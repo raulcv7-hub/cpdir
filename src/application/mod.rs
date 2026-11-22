@@ -27,6 +27,7 @@ pub use workspace::WorkspaceSession;
 /// fails.
 pub fn run_interactive(
     target_dir: &Path,
+    include_abs_path: bool,
     clipboard: &dyn ClipboardWriter,
 ) -> Result<RunOutcome, AppError> {
     if !target_dir.is_dir() {
@@ -44,6 +45,7 @@ pub fn run_interactive(
         ScanConfig::default(),
         GitContextConfig::default(),
     )?;
+    state.set_include_abs_path(include_abs_path);
     event_loop::run_tui_event_loop(&mut session, &mut state)?;
     session.export_clipboard(state, clipboard)
 }

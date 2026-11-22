@@ -68,6 +68,7 @@ fn ui_event_strategy() -> impl Strategy<Value = FuzzEvent> {
         Just(KeyCode::Char('c')),
         Just(KeyCode::Char('e')),
         Just(KeyCode::Char('g')),
+        Just(KeyCode::Char('p')),
         Just(KeyCode::Char('i')),
         Just(KeyCode::Char('d')),
         Just(KeyCode::Char('n')),

@@ -131,6 +131,22 @@ impl TuiAppState {
         self.context.toggle_git_context();
     }
 
+    /// Returns `true` when normalized `root_path` will be emitted inside `<context_summary>`.
+    #[must_use]
+    pub const fn include_abs_path(&self) -> bool {
+        self.context.include_abs_path()
+    }
+
+    /// Sets opt-in `root_path` emission state (defaults to `false` for privacy).
+    pub const fn set_include_abs_path(&mut self, enabled: bool) {
+        self.context.set_include_abs_path(enabled);
+    }
+
+    /// Toggles opt-in `root_path` emission inside `<context_summary>`.
+    pub const fn toggle_abs_path(&mut self) {
+        self.context.toggle_abs_path();
+    }
+
     /// Returns the current UI mode (main tree or active modal).
     #[must_use]
     pub const fn mode(&self) -> UiMode {

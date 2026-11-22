@@ -1,9 +1,11 @@
 //! Main tree rendering, color weight tiers, folding, Win32 release guard, and narrow viewports.
 
+use std::collections::HashMap;
+
 use cpdir::domain::{
     DirectoryTree, NaturalExclusion, NaturalSelection, TextFileData, TextFileState,
 };
-use cpdir::output::render_strict_xml;
+use cpdir::output::{XmlRenderOptions, render_strict_xml, render_strict_xml_with_options};
 use cpdir::tui::AppExitAction;
 use cpdir::tui::TuiAppState;
 use ratatui::Terminal;
@@ -40,6 +42,8 @@ fn tui_tree_workflow_verifies_colors_folding_release_guard_and_final_xml() {
     assert!(!initial.contains("700.0k"));
     assert!(!initial.contains("Git:"));
     assert!(!initial.contains("[g] Git"));
+    assert!(initial.contains("Path: OFF"));
+    assert!(initial.contains("[p] Path"));
     assert!(initial.contains("Read: 3"));
     assert!(initial.contains("Unread: 2"));
     assert!(initial.contains("Discarded: 2"));
@@ -94,6 +98,56 @@ fn tui_tree_workflow_verifies_colors_folding_release_guard_and_final_xml() {
 }
 
 #[test]
+fn tui_abs_path_toggle_updates_chrome_and_emits_escaped_root_path() {
+    let mut tree = DirectoryTree::new("A&B");
+    let main_id = tree
+        .add_text_file(
+            DirectoryTree::ROOT,
+            "main.rs",
+            TextFileData {
+                byte_len: 12,
+                tokens: 4,
+                secret_hits: 0,
+                state: TextFileState::new(NaturalSelection::Included),
+            },
+        )
+        .expect("main.rs");
+    let contents = HashMap::from([(main_id, "fn main() {}\n".to_owned())]);
+
+    let mut state = TuiAppState::new(tree, false);
+    let mut terminal = Terminal::new(TestBackend::new(100, 22)).expect("test terminal");
+
+    assert!(!state.include_abs_path());
+    assert!(draw_and_dump(&mut terminal, &mut state).contains("Path: OFF"));
+
+    press_key(&mut state, KeyCode::Char('p'));
+    assert!(state.include_abs_path());
+    assert!(draw_and_dump(&mut terminal, &mut state).contains("Path: ON"));
+
+    let abs = state
+        .include_abs_path()
+        .then_some(r"C:\Work\R&D <proj>\A&B");
+    let xml = render_strict_xml_with_options(
+        state.tree(),
+        &contents,
+        XmlRenderOptions {
+            git_context: None,
+            abs_root_path: abs,
+        },
+    )
+    .expect("xml");
+    let parsed = parse_strict_xml(&xml).expect("valid xml");
+    assert_eq!(
+        parsed.context_summary.expect("summary").root_path,
+        Some(r"C:\Work\R&D <proj>\A&B".to_owned())
+    );
+
+    press_key(&mut state, KeyCode::Char('p'));
+    assert!(!state.include_abs_path());
+    assert!(draw_and_dump(&mut terminal, &mut state).contains("Path: OFF"));
+}
+
+#[test]
 fn tui_responsive_layout_pins_badges_on_narrow_terminals_and_scrolls() {
     let mut tree = DirectoryTree::new("monorepo");
     let mut parent = DirectoryTree::ROOT;
@@ -132,7 +186,9 @@ fn tui_responsive_layout_pins_badges_on_narrow_terminals_and_scrolls() {
     let screen = draw_and_dump(&mut terminal, &mut state);
     assert!(screen.contains("! Secrets: 1"));
     assert!(screen.contains("Git: ON"));
+    assert!(screen.contains("Path: OFF"));
     assert!(screen.contains("[g] Git"));
+    assert!(screen.contains("[p] Path"));
     assert!(screen.contains("[Esc] Quit"));
     assert!(screen.contains("… (420) [.gitignore] [!]"));
     assert!(screen.contains("├─") || screen.contains("└─"));

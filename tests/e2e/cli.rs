@@ -30,13 +30,43 @@ fn cli_normalizes_explorer_drive_root_quotes_unc_and_rejects_invalid_args() {
     assert_eq!(
         parse_cli_args(["cpdir"]),
         Ok(CliCommand::Run {
-            target_dir: PathBuf::from(".")
+            target_dir: PathBuf::from("."),
+            include_abs_path: false,
+        })
+    );
+    assert_eq!(
+        parse_cli_args(["cpdir", "--abs-path"]),
+        Ok(CliCommand::Run {
+            target_dir: PathBuf::from("."),
+            include_abs_path: true,
+        })
+    );
+    assert_eq!(
+        parse_cli_args(["cpdir", "--abs-path", r"C:\Work\proj"]),
+        Ok(CliCommand::Run {
+            target_dir: PathBuf::from(r"C:\Work\proj"),
+            include_abs_path: true,
+        })
+    );
+    assert_eq!(
+        parse_cli_args(["cpdir", r"C:\Work\proj", "--abs-path"]),
+        Ok(CliCommand::Run {
+            target_dir: PathBuf::from(r"C:\Work\proj"),
+            include_abs_path: true,
+        })
+    );
+    assert_eq!(
+        parse_cli_args(["cpdir", "--", "--abs-path"]),
+        Ok(CliCommand::Run {
+            target_dir: PathBuf::from("--abs-path"),
+            include_abs_path: false,
         })
     );
     assert_eq!(
         parse_cli_args(["cpdir", "--", "-dash-folder"]),
         Ok(CliCommand::Run {
-            target_dir: PathBuf::from("-dash-folder")
+            target_dir: PathBuf::from("-dash-folder"),
+            include_abs_path: false,
         })
     );
     assert_eq!(parse_cli_args(["cpdir", "--help"]), Ok(CliCommand::Help));
@@ -58,7 +88,9 @@ fn compiled_binary_reports_help_version_and_non_tty_errors_without_touching_stdo
     let help_out = Command::new(bin).arg("--help").output().expect("run help");
     assert!(help_out.status.success());
     assert_eq!(String::from_utf8_lossy(&help_out.stdout), "");
-    assert!(String::from_utf8_lossy(&help_out.stderr).contains("USAGE:"));
+    let help_stderr = String::from_utf8_lossy(&help_out.stderr);
+    assert!(help_stderr.contains("USAGE:"));
+    assert!(help_stderr.contains("--abs-path"));
 
     let ver_out = Command::new(bin).arg("-V").output().expect("run version");
     assert!(ver_out.status.success());

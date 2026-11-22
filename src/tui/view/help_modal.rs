@@ -10,7 +10,7 @@ use crate::tui::state::TuiAppState;
 use crate::tui::view::confirm_modals::centered_fixed_rect;
 
 pub(super) fn render_help_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
-    let popup = centered_fixed_rect(76, 56, 17, area);
+    let popup = centered_fixed_rect(76, 56, 18, area);
     frame.render_widget(Clear, popup);
 
     let git_line = if state.has_git_context() {
@@ -31,6 +31,7 @@ pub(super) fn render_help_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAp
         Line::raw("  a              Toggle All (safe defaults) / None"),
         Line::raw("  i / n / d / s  Inspector (Unread / Discarded / Secrets)"),
         Line::raw(git_line),
+        Line::raw("  p              Toggle root_path in <context_summary>"),
         Line::raw("  Enter / Esc    Copy strict XML to clipboard / Quit"),
         Line::raw(""),
         help_row(

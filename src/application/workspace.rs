@@ -10,18 +10,21 @@ use crate::application::error::{AppError, RunOutcome};
 use crate::config::limits::INLINE_CONTENT_CACHE_BYTES;
 use crate::domain::{GitContextSnapshot, NodeId};
 use crate::git::{GitContextConfig, extract_git_context};
-use crate::output::{ClipboardWriter, render_strict_xml};
+use crate::output::{ClipboardWriter, XmlRenderOptions, render_strict_xml_with_options};
 use crate::scanner::{
     ScanConfig, ScanError, hydrate_selected_contents, release_large_unselected_contents,
     rescan_pruned_dir,
 };
-use crate::state::{MemoryStore, SavedWorkspaceState, normalize_dir_for_hash};
+use crate::state::{
+    MemoryStore, SavedWorkspaceState, normalize_dir_for_hash, resolve_display_abs_path,
+};
 use crate::tui::{AppExitAction, TuiAppState};
 
 /// Imperative session owning loaded file buffers, Git metadata, and persistence adapters.
 #[derive(Debug)]
 pub struct WorkspaceSession {
     target_dir: PathBuf,
+    display_abs_path: String,
     contents: HashMap<NodeId, String>,
     git_snapshot: Option<GitContextSnapshot>,
     scan_config: ScanConfig,
@@ -69,12 +72,19 @@ impl WorkspaceSession {
         let state = build_initial_tui_state(scan.tree, git_snapshot.as_ref(), saved.as_ref());
         let session = Self {
             target_dir: target_dir.to_path_buf(),
+            display_abs_path: resolve_display_abs_path(target_dir),
             contents: scan.contents,
             git_snapshot,
             scan_config,
             store,
         };
         Ok((session, state))
+    }
+
+    /// Returns the normalized absolute path used when opt-in `root_path` emission is enabled.
+    #[must_use]
+    pub fn display_abs_path(&self) -> &str {
+        &self.display_abs_path
     }
 
     /// Returns an immutable reference to currently cached file contents.
@@ -147,6 +157,9 @@ impl WorkspaceSession {
         } else {
             None
         };
+        let abs_root_path = state
+            .include_abs_path()
+            .then_some(self.display_abs_path.as_str());
         let total_tokens = state.total_effective_tokens();
 
         let tree = state.into_tree();
@@ -159,7 +172,15 @@ impl WorkspaceSession {
         .map_err(AppError::ContentHydration)?;
 
         let counts = tree.compute_metrics().counts;
-        let xml = render_strict_xml(&tree, &self.contents, active_git).map_err(AppError::Xml)?;
+        let xml = render_strict_xml_with_options(
+            &tree,
+            &self.contents,
+            XmlRenderOptions {
+                git_context: active_git,
+                abs_root_path,
+            },
+        )
+        .map_err(AppError::Xml)?;
         clipboard.copy_text(&xml).map_err(AppError::Clipboard)?;
 
         let to_save = SavedWorkspaceState::new(
