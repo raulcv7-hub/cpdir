@@ -8,7 +8,10 @@ use crate::domain::{
     SecretRuleKind, UnselectedReason,
 };
 use crate::tui::state::TuiAppState;
-use crate::tui::theme::{
+use crate::tui::view::badges::{
+    checkbox_span, discard_badge_style, discard_tag, unselected_badge_style, unselected_tag,
+};
+use crate::tui::view::theme::{
     cursor_glyph_style, cursor_row_style, format_token_count, sanitize_tui_label,
     secret_marker_style, secret_rule_label,
 };
@@ -95,9 +98,11 @@ fn push_unread_file_spans(
     tokens: usize,
 ) {
     let active = is_node_selected(state, node_id);
-    let (tag, tag_style) = unselected_badge(reason);
     spans.push(checkbox_span(active));
-    spans.push(Span::styled(format!("[{tag}]"), tag_style));
+    spans.push(Span::styled(
+        format!("[{}]", unselected_tag(reason)),
+        unselected_badge_style(reason),
+    ));
     spans.push(Span::raw(format!(" {clean_path}")));
     if tokens > 0 {
         spans.push(Span::styled(
@@ -132,9 +137,11 @@ fn push_discarded_file_spans(
     clean_path: &str,
     reason: FileDiscardReason,
 ) {
-    let (tag, tag_style) = discard_badge(reason);
     spans.push(Span::raw("    "));
-    spans.push(Span::styled(format!("[{tag}]"), tag_style));
+    spans.push(Span::styled(
+        format!("[{}]", discard_tag(reason)),
+        discard_badge_style(reason),
+    ));
     spans.push(Span::raw(format!(" {clean_path}")));
     spans.push(Span::styled(
         " (non-text)",
@@ -176,40 +183,4 @@ fn is_node_selected(state: &TuiAppState, id: NodeId) -> bool {
         state.tree().get(id).map(|n| &n.kind),
         Some(NodeKind::TextFile(f)) if f.state.is_selected()
     )
-}
-
-fn checkbox_span(active: bool) -> Span<'static> {
-    if active {
-        Span::styled(
-            "[x] ",
-            Style::new()
-                .fg(Color::Rgb(85, 220, 125))
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled("[ ] ", Style::new().fg(Color::Rgb(130, 135, 145)))
-    }
-}
-
-const fn unselected_badge(reason: UnselectedReason) -> (&'static str, Style) {
-    match reason {
-        UnselectedReason::DotIgnore => (".ignore", Style::new().fg(Color::Rgb(245, 210, 75))),
-        UnselectedReason::GitIgnore => (".gitignore", Style::new().fg(Color::Rgb(185, 165, 90))),
-        UnselectedReason::ExceedsTokenThreshold => {
-            (">50k", Style::new().fg(Color::Rgb(255, 95, 95)))
-        }
-        UnselectedReason::UserExcluded => ("off", Style::new().fg(Color::Rgb(150, 155, 165))),
-        UnselectedReason::PrunedDir => ("pruned", Style::new().fg(Color::Rgb(150, 155, 165))),
-    }
-}
-
-const fn discard_badge(reason: FileDiscardReason) -> (&'static str, Style) {
-    match reason {
-        FileDiscardReason::Binary => ("BIN", Style::new().fg(Color::Rgb(135, 145, 160))),
-        FileDiscardReason::InvalidUtf8 => ("UTF8", Style::new().fg(Color::Rgb(210, 120, 120))),
-        FileDiscardReason::ExceedsHardCap { .. } => {
-            (">5MB", Style::new().fg(Color::Rgb(230, 140, 80)))
-        }
-        FileDiscardReason::Unreadable => ("ERR", Style::new().fg(Color::Rgb(230, 90, 90))),
-    }
 }
