@@ -7,8 +7,8 @@ use std::path::Path;
 
 pub use crate::config::limits::INLINE_CONTENT_CACHE_BYTES;
 use crate::domain::{DirectoryTree, FileDiscardReason, NodeId, NodeKind};
+use crate::scanner::dir_entries::resolve_rel_path;
 use crate::scanner::file_reader::{ReadFileOutcome, read_bounded_utf8};
-use crate::scanner::traversal::resolve_rel_path;
 
 /// Errors emitted when re-reading an unselected file that the user enabled prior to copying.
 #[derive(Debug, Clone, PartialEq, Eq)]

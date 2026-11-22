@@ -2,6 +2,7 @@
 
 pub mod clipboard;
 pub mod git_xml;
+mod xml_escape;
 pub mod xml_writer;
 
 pub use crate::domain::{

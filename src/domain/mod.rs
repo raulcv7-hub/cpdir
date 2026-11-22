@@ -4,6 +4,7 @@ pub mod findings;
 pub mod folding;
 pub mod git_snapshot;
 pub mod inspector;
+mod inspector_query;
 pub mod merge;
 pub mod metrics;
 pub mod node;

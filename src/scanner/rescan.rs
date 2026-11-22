@@ -5,8 +5,9 @@ use std::path::Path;
 
 pub use crate::config::limits::DEFAULT_RESCAN_MAX_ENTRIES;
 use crate::domain::{DirectoryTree, NodeId};
+use crate::scanner::dir_entries::resolve_rel_path;
 use crate::scanner::ignore_rules::IgnoreRuleStack;
-use crate::scanner::traversal::{WalkPolicy, resolve_rel_path, traverse_tree};
+use crate::scanner::traversal::{WalkPolicy, traverse_tree};
 use crate::scanner::walker::{ScanConfig, ScanError};
 
 /// Result produced by re-scanning a single pruned directory subtree under `max_entries`.

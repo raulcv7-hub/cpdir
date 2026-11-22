@@ -3,18 +3,19 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::application::analyze::analyze_tree_contents;
+use crate::application::analyze::{
+    analyze_tree_contents, build_initial_tui_state, scan_and_analyze,
+};
 use crate::application::error::{AppError, RunOutcome};
 use crate::config::limits::INLINE_CONTENT_CACHE_BYTES;
 use crate::domain::{GitContextSnapshot, NodeId};
 use crate::git::{GitContextConfig, extract_git_context};
-use crate::output::{ClipboardWriter, render_git_context_xml, render_strict_xml};
+use crate::output::{ClipboardWriter, render_strict_xml};
 use crate::scanner::{
-    ScanConfig, ScanError, ScanResult, hydrate_selected_contents,
-    release_large_unselected_contents, rescan_pruned_dir, scan_directory,
+    ScanConfig, ScanError, hydrate_selected_contents, release_large_unselected_contents,
+    rescan_pruned_dir,
 };
 use crate::state::{MemoryStore, SavedWorkspaceState, normalize_dir_for_hash};
-use crate::tokens::TokenCounter;
 use crate::tui::{AppExitAction, TuiAppState};
 
 /// Imperative session owning loaded file buffers, Git metadata, and persistence adapters.
@@ -172,30 +173,4 @@ impl WorkspaceSession {
             xml_bytes: xml.len(),
         })
     }
-}
-
-fn scan_and_analyze(target_dir: &Path, config: &ScanConfig) -> Result<ScanResult, AppError> {
-    let mut scan = scan_directory(target_dir, config).map_err(AppError::Scan)?;
-    analyze_tree_contents(&mut scan.tree, &scan.contents)?;
-    Ok(scan)
-}
-
-fn build_initial_tui_state(
-    tree: crate::domain::DirectoryTree,
-    git_snapshot: Option<&GitContextSnapshot>,
-    saved: Option<&SavedWorkspaceState>,
-) -> TuiAppState {
-    let mut state = TuiAppState::new(tree, git_snapshot.is_some());
-    if let Some(snap) = git_snapshot
-        && let Ok(counter) = TokenCounter::o200k()
-    {
-        let git_xml = render_git_context_xml(snap);
-        state.set_git_context_tokens(counter.count(&git_xml));
-    }
-    if let Some(prev) = saved
-        && let Some(git_enabled) = prev.git_context_enabled
-    {
-        state.set_include_git_context(git_enabled);
-    }
-    state
 }

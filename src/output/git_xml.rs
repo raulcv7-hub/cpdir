@@ -6,7 +6,7 @@ use crate::domain::{
     GitCommitEntry, GitContextSnapshot, GitDiffNumstatEntry, GitDiffStat, GitHotspotEntry,
     GitTagEntry,
 };
-use crate::output::xml_writer::push_escaped_xml_text;
+use crate::output::xml_escape::push_escaped_xml_text;
 
 /// Renders `<git_context>` as a standalone XML fragment for accurate token accounting.
 #[must_use]

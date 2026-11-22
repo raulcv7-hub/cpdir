@@ -1,4 +1,4 @@
-//! Strict XML 1.0 serialization with control-character sanitization and zero-loss escaping.
+//! Strict XML 1.0 document assembly for directory structure, git context, and selected files.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -6,6 +6,7 @@ use std::hash::BuildHasher;
 
 use crate::domain::{DirectoryTree, GitContextSnapshot, NodeId, NodeKind};
 use crate::output::git_xml::render_git_context;
+use crate::output::xml_escape::{push_escaped_xml_attr, push_escaped_xml_text};
 
 /// Errors prevented while assembling the final XML document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,19 +62,6 @@ pub fn render_strict_xml<S: BuildHasher>(
     xml.push_str("</cpdir_context>\n");
 
     Ok(xml)
-}
-
-pub(crate) fn push_escaped_xml_text(out: &mut String, text: &str) {
-    for ch in text.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '\r' => out.push_str("&#xD;"),
-            _ if is_valid_xml10_char(ch) => out.push(ch),
-            _ => out.push('\u{FFFD}'),
-        }
-    }
 }
 
 fn estimate_output_bytes(tree: &DirectoryTree) -> usize {
@@ -142,32 +130,4 @@ fn push_indent(out: &mut String, levels: usize) {
     for _ in 0..levels {
         out.push_str("  ");
     }
-}
-
-fn push_escaped_xml_attr(out: &mut String, attr: &str) {
-    for ch in attr.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            '\r' => out.push_str("&#xD;"),
-            '\n' => out.push_str("&#xA;"),
-            '\t' => out.push_str("&#x9;"),
-            _ if is_valid_xml10_char(ch) => out.push(ch),
-            _ => out.push('\u{FFFD}'),
-        }
-    }
-}
-
-const fn is_valid_xml10_char(ch: char) -> bool {
-    matches!(
-        ch,
-        '\t' | '\n'
-            | '\r'
-            | '\u{0020}'..='\u{D7FF}'
-            | '\u{E000}'..='\u{FFFD}'
-            | '\u{10000}'..='\u{10FFFF}'
-    )
 }

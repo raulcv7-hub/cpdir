@@ -1,6 +1,7 @@
 //! Filesystem traversal, ignore evaluation, and safe `UTF-8` ingestion.
 
 pub mod content_store;
+mod dir_entries;
 pub mod file_reader;
 pub mod ignore_rules;
 pub mod rescan;
