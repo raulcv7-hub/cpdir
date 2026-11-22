@@ -63,11 +63,11 @@ fn render_inspector_modal(
     ])
     .split(inner);
 
-    state.viewport_areas.inspector_tabs = sections[0];
-    state.viewport_areas.inspector_body = sections[1];
+    let viewport_h = usize::from(sections[1].height);
+    state.ensure_inspector_cursor_visible(viewport_h);
 
     let counts = state.metrics().counts;
-    render_tab_header(
+    let tab_rects = render_tab_header(
         frame,
         sections[0],
         tab,
@@ -76,37 +76,42 @@ fn render_inspector_modal(
         counts.total_secret_files,
     );
 
-    let Some(ins) = state.active_inspector() else {
-        return;
-    };
-    let entries = ins.entries();
-    let total = entries.len();
-    let viewport_h = usize::from(sections[1].height);
-    let (start, end) = compute_visible_window(ins.cursor(), ins.scroll(), total, viewport_h);
+    state.viewport_areas.inspector_tabs = sections[0];
+    state.viewport_areas.inspector_tab_rects = tab_rects;
+    state.viewport_areas.inspector_body = sections[1];
 
-    let lines: Vec<Line<'static>> = if entries.is_empty() {
-        vec![
-            Line::raw(""),
-            Line::styled(
-                format!("  No {} entries in this workspace.", tab_name(tab)),
-                Style::new().fg(Color::Rgb(150, 155, 165)),
-            ),
-        ]
-    } else {
-        entries[start..end]
-            .iter()
-            .enumerate()
-            .map(|(offset, entry)| {
-                build_inspector_entry_line(state, entry, start + offset == ins.cursor())
-            })
-            .collect()
+    let (total, start, lines, status_note) = {
+        let Some(ins) = state.active_inspector() else {
+            return;
+        };
+        let entries = ins.entries();
+        let total = entries.len();
+        let (start, end) = compute_visible_window(ins.cursor(), ins.scroll(), total, viewport_h);
+
+        let lines: Vec<Line<'static>> = if entries.is_empty() {
+            vec![
+                Line::raw(""),
+                Line::styled(
+                    format!("  No {} entries in this workspace.", tab_name(tab)),
+                    Style::new().fg(Color::Rgb(150, 155, 165)),
+                ),
+            ]
+        } else {
+            entries[start..end]
+                .iter()
+                .enumerate()
+                .map(|(offset, entry)| {
+                    build_inspector_entry_line(state, entry, start + offset == ins.cursor())
+                })
+                .collect()
+        };
+        (total, start, lines, ins.status_note().map(str::to_owned))
     };
 
+    state.viewport_areas.inspector_scroll_top = start;
     frame.render_widget(Paragraph::new(lines), sections[1]);
 
-    if let Some(ins) = state.active_inspector()
-        && let Some(note) = ins.status_note()
-    {
+    if let Some(note) = status_note {
         let status_line = Line::styled(
             format!(" {note}"),
             Style::new()
@@ -141,7 +146,7 @@ fn render_tab_header(
     unread: usize,
     discarded: usize,
     secrets: usize,
-) {
+) -> [Rect; 3] {
     let tabs = [
         (
             InspectorTab::Unread,
@@ -160,11 +165,21 @@ fn render_tab_header(
         ),
     ];
 
+    let max_x = area.x.saturating_add(area.width);
+    let mut x = area.x.saturating_add(1);
+    let mut tab_rects = [Rect::default(); 3];
     let mut spans = vec![Span::raw(" ")];
+
     for (idx, (tab, label, color)) in tabs.into_iter().enumerate() {
         if idx > 0 {
             spans.push(Span::styled(" | ", Style::new().fg(Color::Rgb(75, 82, 98))));
+            x = x.saturating_add(3);
         }
+        let label_w = u16::try_from(Span::raw(label.as_str()).width()).unwrap_or(u16::MAX);
+        let clipped_w = label_w.min(max_x.saturating_sub(x));
+        tab_rects[idx] = Rect::new(x, area.y, clipped_w, 1);
+        x = x.saturating_add(label_w);
+
         let style = if tab == active {
             Style::new()
                 .fg(Color::Rgb(20, 24, 32))
@@ -182,6 +197,7 @@ fn render_tab_header(
         Line::styled(sep, Style::new().fg(Color::Rgb(75, 82, 98))),
     ]);
     frame.render_widget(widget, area);
+    tab_rects
 }
 
 fn compute_visible_window(

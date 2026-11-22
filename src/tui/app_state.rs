@@ -121,6 +121,12 @@ impl TuiAppState {
         self.scroll_offset
     }
 
+    /// Returns the last rendered interactive viewport regions for hit-testing.
+    #[must_use]
+    pub const fn viewport_areas(&self) -> TuiViewportAreas {
+        self.viewport_areas
+    }
+
     /// Returns `true` when the workspace is inside a valid Git repository.
     #[must_use]
     pub const fn has_git_context(&self) -> bool {

@@ -103,8 +103,8 @@ impl TerminalGuard {
             Err(err) => {
                 let _ = execute!(
                     io::stderr(),
-                    LeaveAlternateScreen,
-                    event::DisableMouseCapture
+                    event::DisableMouseCapture,
+                    LeaveAlternateScreen
                 );
                 let _ = disable_raw_mode();
                 Err(AppError::TerminalIo(err.to_string()))
@@ -115,14 +115,14 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        let _ = self.terminal.show_cursor();
         let _ = execute!(
             self.terminal.backend_mut(),
-            LeaveAlternateScreen,
-            event::DisableMouseCapture
+            event::DisableMouseCapture,
+            LeaveAlternateScreen
         );
         let _ = self.terminal.backend_mut().flush();
         let _ = disable_raw_mode();
-        let _ = self.terminal.show_cursor();
     }
 }
 
@@ -255,17 +255,16 @@ fn run_tui_event_loop(
         let first = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
         let mut reingest_needed = dispatch_app_event(state, &first, &mut needs_draw);
 
-        while event::poll(Duration::ZERO).map_err(|err| AppError::TerminalIo(err.to_string()))? {
+        while state.exit_action().is_none()
+            && event::poll(Duration::ZERO).map_err(|err| AppError::TerminalIo(err.to_string()))?
+        {
             let next = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
             if dispatch_app_event(state, &next, &mut needs_draw) {
                 reingest_needed = true;
             }
-            if state.exit_action().is_some() {
-                break;
-            }
         }
 
-        if reingest_needed {
+        if state.exit_action().is_none() && reingest_needed {
             handle_pending_reingest(target_dir, state, contents);
             needs_draw = true;
         }

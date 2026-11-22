@@ -6,8 +6,8 @@ use common::workspace::{WorkspaceBuilder, mid_stream_corrupt_utf8_bytes, sample_
 use common::xml_validator::parse_strict_xml;
 use cpdir::config::defaults::DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD;
 use cpdir::domain::{
-    DirectoryTree, NaturalExclusion, NaturalSelection, SecretFinding, SecretRuleKind, TextFileData,
-    TextFileState,
+    DirectoryTree, NaturalExclusion, NaturalSelection, NodeKind, SecretFinding, SecretRuleKind,
+    TextFileData, TextFileState,
 };
 use cpdir::output::render_strict_xml;
 use cpdir::scanner::{ScanConfig, ScanResult, rescan_pruned_dir, scan_directory};
@@ -74,6 +74,18 @@ fn release_key(state: &mut TuiAppState, code: KeyCode) {
     let mut ev = KeyEvent::new(code, KeyModifiers::NONE);
     ev.kind = KeyEventKind::Release;
     handle_key_event(state, ev);
+}
+
+fn click_left(state: &mut TuiAppState, column: u16, row: u16) -> bool {
+    handle_mouse_event(
+        state,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        },
+    )
 }
 
 fn move_cursor_to(state: &mut TuiAppState, target_rel: &str) {
@@ -530,7 +542,7 @@ fn tui_responsive_layout_pins_badges_on_narrow_terminals_and_scrolls() {
 }
 
 #[test]
-fn tui_mouse_wheel_and_left_click_navigation() {
+fn tui_mouse_wheel_and_tree_click_navigation() {
     let ws = WorkspaceBuilder::new();
     ws.write_text("src/main.rs", "fn main() {}\n");
     ws.write_text("src/lib.rs", "pub fn lib() {}\n");
@@ -540,13 +552,12 @@ fn tui_mouse_wheel_and_left_click_navigation() {
     let mut state = TuiAppState::new(scan.tree, false);
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("test terminal");
 
-    // Render tree to initialize viewport areas.
     draw_screen(&mut terminal, &mut state);
     assert_eq!(state.cursor(), 0);
     assert_eq!(state.metrics().counts.read_files, 3);
 
     // Mouse wheel down advances the tree cursor.
-    handle_mouse_event(
+    let changed = handle_mouse_event(
         &mut state,
         MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -555,52 +566,45 @@ fn tui_mouse_wheel_and_left_click_navigation() {
             modifiers: KeyModifiers::NONE,
         },
     );
+    assert!(changed);
     assert_eq!(state.cursor(), 2);
 
-    // Left click on a row moves the cursor and toggles its selection.
-    let target_row_y = state.viewport_areas.tree_body.y + 2;
-    handle_mouse_event(
-        &mut state,
-        MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 15,
-            row: target_row_y,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
+    // Left click on `docs/` row moves cursor and toggles its selection.
+    let target_row_y = state.viewport_areas().tree_body.y + 2;
+    assert!(click_left(&mut state, 15, target_row_y));
     draw_screen(&mut terminal, &mut state);
     assert_eq!(state.cursor(), 1);
     assert_eq!(state.metrics().counts.read_files, 2);
 
-    // Left click on fold arrow of a directory folds it.
-    let fold_col = state.viewport_areas.tree_body.x + 3; // cursor glyph (2) + fold triangle (1)
-    let dir_row_y = state.viewport_areas.tree_body.y + 2;
-    handle_mouse_event(
-        &mut state,
-        MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: fold_col,
-            row: dir_row_y,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
+    // Left click on fold triangle of depth-1 `docs/`: border (1) + cursor (2) + guide (2) = +5.
+    let fold_col = state.viewport_areas().tree_body.x + 5;
+    let dir_row_y = state.viewport_areas().tree_body.y + 2;
+    assert!(click_left(&mut state, fold_col, dir_row_y));
     draw_screen(&mut terminal, &mut state);
-    let folded_rows = state.visible_rows().len();
+    assert_eq!(state.visible_rows().len(), 5);
 
-    // Click again unfolds it.
-    handle_mouse_event(
-        &mut state,
-        MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: fold_col,
-            row: dir_row_y,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
+    // Click again unfolds `docs/`.
+    assert!(click_left(&mut state, fold_col, dir_row_y));
     draw_screen(&mut terminal, &mut state);
-    assert!(state.visible_rows().len() > folded_rows);
+    assert_eq!(state.visible_rows().len(), 6);
+}
 
-    // Open Inspector and test mouse wheel and tab clicks.
+#[test]
+fn tui_mouse_inspector_tab_and_row_clicks() {
+    let ws = WorkspaceBuilder::new();
+    ws.write_text("src/main.rs", "fn main() {}\n");
+    ws.write_text("src/lib.rs", "pub fn lib() {}\n");
+    ws.write_text("docs/readme.md", "# readme\n");
+
+    let scan = scan_and_tokenize(&ws);
+    let mut state = TuiAppState::new(scan.tree, false);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("test terminal");
+
+    draw_screen(&mut terminal, &mut state);
+    let docs_row_y = state.viewport_areas().tree_body.y + 2;
+    assert!(click_left(&mut state, 15, docs_row_y));
+    assert_eq!(state.metrics().counts.read_files, 2);
+
     press_key(&mut state, KeyCode::Char('i'));
     draw_screen(&mut terminal, &mut state);
     assert_eq!(
@@ -611,17 +615,10 @@ fn tui_mouse_wheel_and_left_click_navigation() {
         }
     );
 
-    // Click on Discarded tab in the inspector tab bar.
-    let disc_tab_col = state.viewport_areas.inspector_tabs.x + 20;
-    handle_mouse_event(
-        &mut state,
-        MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: disc_tab_col,
-            row: state.viewport_areas.inspector_tabs.y,
-            modifiers: KeyModifiers::NONE,
-        },
-    );
+    let disc_rect = state
+        .viewport_areas()
+        .inspector_tab_rect(InspectorTab::Discarded);
+    assert!(click_left(&mut state, disc_rect.x + 1, disc_rect.y));
     draw_screen(&mut terminal, &mut state);
     assert_eq!(
         state.mode(),
@@ -630,6 +627,85 @@ fn tui_mouse_wheel_and_left_click_navigation() {
             scroll: 0,
         }
     );
+
+    // Clicking empty whitespace on the right side of the tab bar must not switch tabs.
+    let tabs_bar = state.viewport_areas().inspector_tabs;
+    assert!(!click_left(
+        &mut state,
+        tabs_bar.x + tabs_bar.width - 1,
+        tabs_bar.y
+    ));
+    assert!(matches!(
+        state.mode(),
+        UiMode::Inspector {
+            tab: InspectorTab::Discarded,
+            ..
+        }
+    ));
+
+    // Switch back to Unread via click and toggle `[DIR] docs/` ON by clicking row 0 in body.
+    let unread_rect = state
+        .viewport_areas()
+        .inspector_tab_rect(InspectorTab::Unread);
+    assert!(click_left(&mut state, unread_rect.x + 1, unread_rect.y));
+    draw_screen(&mut terminal, &mut state);
+
+    let body = state.viewport_areas().inspector_body;
+    assert!(click_left(&mut state, body.x + 2, body.y));
+    assert_eq!(state.metrics().counts.read_files, 3);
+}
+
+#[test]
+fn tui_mouse_inspector_tall_viewport_scroll_click_targets_exact_row() {
+    let mut tree = DirectoryTree::new("tall_ws");
+    for idx in 0..25 {
+        tree.add_text_file(
+            DirectoryTree::ROOT,
+            format!("ign_{idx:02}.log"),
+            TextFileData {
+                byte_len: 30,
+                tokens: 10,
+                secret_hits: 0,
+                state: TextFileState::new(NaturalSelection::Excluded(NaturalExclusion::GitIgnore)),
+            },
+        )
+        .expect("add ignored file");
+    }
+
+    let mut state = TuiAppState::new(tree, false);
+    let mut terminal = Terminal::new(TestBackend::new(100, 36)).expect("tall test terminal");
+
+    press_key(&mut state, KeyCode::Char('i'));
+    draw_screen(&mut terminal, &mut state);
+    press_key(&mut state, KeyCode::End);
+    draw_screen(&mut terminal, &mut state);
+
+    let body = state.viewport_areas().inspector_body;
+    assert!(
+        usize::from(body.height) > 14,
+        "test requires inspector body taller than old nominal 14"
+    );
+
+    let expected_top_idx = match state.mode() {
+        UiMode::Inspector { scroll, .. } => scroll,
+        other => panic!("expected Inspector mode, got {other:?}"),
+    };
+    assert!(expected_top_idx > 0);
+
+    // Click first visible row in the scrolled inspector body -> must toggle exact file at scroll_top.
+    assert!(click_left(&mut state, body.x + 2, body.y));
+
+    let expected_name = format!("ign_{expected_top_idx:02}.log");
+    let selected_names: Vec<&str> = state
+        .tree()
+        .nodes()
+        .iter()
+        .filter_map(|n| match &n.kind {
+            NodeKind::TextFile(f) if f.state.is_selected() => Some(n.rel_path.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(selected_names, vec![expected_name.as_str()]);
 }
 
 #[test]
