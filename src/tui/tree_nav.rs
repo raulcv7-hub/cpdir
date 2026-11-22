@@ -67,6 +67,15 @@ impl TuiAppState {
         }
     }
 
+    /// Toggles fold/unfold on the directory at `visible_idx`.
+    pub fn toggle_expand_at_index(&mut self, visible_idx: usize) {
+        if let Some(row) = self.visible_rows.get(visible_idx)
+            && self.tree.toggle_expand(row.node_id)
+        {
+            self.refresh_visible_rows();
+        }
+    }
+
     /// Collapses every subdirectory while keeping root expanded.
     pub fn collapse_all(&mut self) {
         self.tree.collapse_all_subdirs();

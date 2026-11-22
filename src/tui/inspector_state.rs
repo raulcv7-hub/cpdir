@@ -137,6 +137,13 @@ impl TuiAppState {
         self.open_inspector_tab(next);
     }
 
+    /// Sets the highlighted entry index inside the active inspector modal.
+    pub fn set_inspector_cursor(&mut self, cursor: usize) {
+        if let ActiveModal::Inspector(ins) = &mut self.modal {
+            ins.restore_cursor(cursor);
+        }
+    }
+
     /// Moves the active inspector cursor by `delta` rows (`isize`).
     pub fn scroll_inspector(&mut self, delta: isize) {
         if let ActiveModal::Inspector(ins) = &mut self.modal {

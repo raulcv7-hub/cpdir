@@ -2,12 +2,13 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::io::{self, IsTerminal as _};
+use std::io::{self, BufWriter, IsTerminal as _, Write as _};
 use std::path::Path;
+use std::time::Duration;
 
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -28,7 +29,8 @@ use crate::security::{SecretScanner, populate_secret_hits};
 use crate::state::{MemoryStore, SavedWorkspaceState, normalize_dir_for_hash};
 use crate::tokens::{TokenCounter, TokenError, populate_token_counts};
 use crate::tui::{
-    AppExitAction, TuiAppState, handle_key_event, render_active_modal, render_tree_view,
+    AppExitAction, TuiAppState, handle_key_event, handle_mouse_event, render_active_modal,
+    render_tree_view,
 };
 
 /// Successful interactive run result returned to `main`.
@@ -83,22 +85,27 @@ impl fmt::Display for AppError {
 impl std::error::Error for AppError {}
 
 struct TerminalGuard {
-    terminal: Terminal<CrosstermBackend<io::Stderr>>,
+    terminal: Terminal<CrosstermBackend<BufWriter<io::Stderr>>>,
 }
 
 impl TerminalGuard {
     fn enter() -> Result<Self, AppError> {
         enable_raw_mode().map_err(|err| AppError::TerminalIo(err.to_string()))?;
         let mut stderr = io::stderr();
-        if let Err(err) = execute!(stderr, EnterAlternateScreen) {
+        if let Err(err) = execute!(stderr, EnterAlternateScreen, event::EnableMouseCapture) {
             let _ = disable_raw_mode();
             return Err(AppError::TerminalIo(err.to_string()));
         }
-        let backend = CrosstermBackend::new(stderr);
+        let buffered = BufWriter::with_capacity(32 * 1024, stderr);
+        let backend = CrosstermBackend::new(buffered);
         match Terminal::new(backend) {
             Ok(terminal) => Ok(Self { terminal }),
             Err(err) => {
-                let _ = execute!(io::stderr(), LeaveAlternateScreen);
+                let _ = execute!(
+                    io::stderr(),
+                    LeaveAlternateScreen,
+                    event::DisableMouseCapture
+                );
                 let _ = disable_raw_mode();
                 Err(AppError::TerminalIo(err.to_string()))
             }
@@ -108,7 +115,12 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            LeaveAlternateScreen,
+            event::DisableMouseCapture
+        );
+        let _ = self.terminal.backend_mut().flush();
         let _ = disable_raw_mode();
         let _ = self.terminal.show_cursor();
     }
@@ -225,26 +237,61 @@ fn run_tui_event_loop(
     contents: &mut HashMap<NodeId, String>,
 ) -> Result<(), AppError> {
     let mut guard = TerminalGuard::enter()?;
-    while state.exit_action().is_none() {
-        guard
-            .terminal
-            .draw(|frame| {
-                let area = frame.area();
-                render_tree_view(frame, area, state);
-                render_active_modal(frame, area, state);
-            })
-            .map_err(|err| AppError::TerminalIo(err.to_string()))?;
+    let mut needs_draw = true;
 
-        match event::read() {
-            Ok(Event::Key(key)) => {
-                handle_key_event(state, key);
-                handle_pending_reingest(target_dir, state, contents);
+    while state.exit_action().is_none() {
+        if needs_draw {
+            guard
+                .terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    render_tree_view(frame, area, state);
+                    render_active_modal(frame, area, state);
+                })
+                .map_err(|err| AppError::TerminalIo(err.to_string()))?;
+            needs_draw = false;
+        }
+
+        let first = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
+        let mut reingest_needed = dispatch_app_event(state, &first, &mut needs_draw);
+
+        while event::poll(Duration::ZERO).map_err(|err| AppError::TerminalIo(err.to_string()))? {
+            let next = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
+            if dispatch_app_event(state, &next, &mut needs_draw) {
+                reingest_needed = true;
             }
-            Ok(_) => {}
-            Err(err) => return Err(AppError::TerminalIo(err.to_string())),
+            if state.exit_action().is_some() {
+                break;
+            }
+        }
+
+        if reingest_needed {
+            handle_pending_reingest(target_dir, state, contents);
+            needs_draw = true;
         }
     }
     Ok(())
+}
+
+fn dispatch_app_event(state: &mut TuiAppState, ev: &Event, needs_draw: &mut bool) -> bool {
+    match ev {
+        Event::Key(key) => {
+            if key.kind != KeyEventKind::Release {
+                handle_key_event(state, *key);
+                *needs_draw = true;
+            }
+        }
+        Event::Mouse(mouse) => {
+            if handle_mouse_event(state, *mouse) {
+                *needs_draw = true;
+            }
+        }
+        Event::Resize(_, _) => {
+            *needs_draw = true;
+        }
+        _ => {}
+    }
+    state.has_pending_reingest()
 }
 
 fn handle_pending_reingest(

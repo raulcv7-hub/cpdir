@@ -24,6 +24,8 @@ pub fn render_tree_view(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppSta
     ])
     .split(area);
 
+    state.viewport_areas.tree_body = chunks[1];
+
     render_header(frame, chunks[0], state);
     render_tree_body(frame, chunks[1], state);
     render_footer(frame, chunks[2], state);

@@ -3,6 +3,7 @@
 use crate::domain::{DirectoryTree, InspectorCategory, InspectorItem, TreeMetrics, VisibleRow};
 use crate::tui::inspector_items::InspectorTab;
 use crate::tui::inspector_state::InspectorState;
+use crate::tui::mouse::TuiViewportAreas;
 
 /// Active view layer controlling key handling and modal overlays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +59,7 @@ pub struct TuiAppState {
     git_context_tokens: usize,
     pub(super) pending_reingest: Option<String>,
     pub(super) modal: ActiveModal,
+    pub(super) viewport_areas: TuiViewportAreas,
     exit_action: Option<AppExitAction>,
 }
 
@@ -78,6 +80,7 @@ impl TuiAppState {
             git_context_tokens: 0,
             pending_reingest: None,
             modal: ActiveModal::None,
+            viewport_areas: TuiViewportAreas::default(),
             exit_action: None,
         }
     }
@@ -190,6 +193,12 @@ impl TuiAppState {
     #[must_use]
     pub fn inspector_items(&self, category: InspectorCategory) -> Vec<InspectorItem> {
         self.tree.inspector_items(category)
+    }
+
+    /// Returns `true` if an on-demand pruned directory re-ingest has been requested.
+    #[must_use]
+    pub fn has_pending_reingest(&self) -> bool {
+        self.pending_reingest.is_some()
     }
 
     /// Toggles selection for the file or subtree under the cursor.
