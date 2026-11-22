@@ -6,6 +6,7 @@ pub mod config;
 pub mod domain;
 pub mod git;
 pub mod output;
+pub mod platform;
 pub mod scanner;
 pub mod security;
 pub mod state;
