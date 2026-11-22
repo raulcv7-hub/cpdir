@@ -4,6 +4,7 @@ pub mod content_store;
 pub mod file_reader;
 pub mod ignore_rules;
 pub mod rescan;
+mod traversal;
 pub mod walker;
 
 pub use content_store::{
