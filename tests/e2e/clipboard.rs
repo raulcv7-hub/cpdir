@@ -72,6 +72,7 @@ fn full_scan_tokenize_xml_pipeline_writes_win32_clipboard_cleanly() {
     copy_to_clipboard(&xml).expect("copy to clipboard");
 
     let clipboard_text = read_clipboard_with_retry();
+    assert!(!clipboard_text.contains("&#xD;"));
     let parsed = parse_strict_xml(&clipboard_text).expect("clipboard xml must be valid");
     let summary = parsed.context_summary.expect("context_summary");
     assert_eq!(summary.included_files, 3);
@@ -94,7 +95,7 @@ fn full_scan_tokenize_xml_pipeline_writes_win32_clipboard_cleanly() {
             },
             ParsedXmlFile {
                 path: "main.rs".to_owned(),
-                content: rust_body.to_owned(),
+                content: rust_body.replace("\r\n", "\n"),
             },
             ParsedXmlFile {
                 path: "notes & tags.txt".to_owned(),
@@ -141,12 +142,13 @@ fn clipboard_roundtrips_2_5_mib_unicode_xml_payload_without_truncation() {
         contents.insert(fid, content.clone());
         expected_files.push(ParsedXmlFile {
             path: name,
-            content,
+            content: content.replace("\r\n", "\n"),
         });
     }
 
     let xml_payload = render_strict_xml(&tree, &contents, None).expect("render large xml");
     assert!(xml_payload.len() > 2_000_000);
+    assert!(!xml_payload.contains("&#xD;"));
 
     copy_to_clipboard(&xml_payload).expect("copy 2.5 MiB payload to clipboard");
     let read_back = read_clipboard_with_retry();

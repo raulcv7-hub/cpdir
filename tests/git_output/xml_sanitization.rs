@@ -47,12 +47,13 @@ fn sanitizes_illegal_xml10_controls_and_fails_fast_on_missing_content() {
 
     let contents = HashMap::from([(log_id, content)]);
     let xml = render_strict_xml(&tree, &contents, None).expect("sanitized xml succeeds");
+    assert!(!xml.contains("&#xD;"));
     let parsed = parse_strict_xml(&xml).expect("sanitized xml parses strictly");
     assert_eq!(
         parsed.files,
         vec![ParsedXmlFile {
             path: "ansi.log".to_owned(),
-            content: "\u{FFFD}[32mok\u{FFFD}[0m\t\r\n\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}"
+            content: "\u{FFFD}[32mok\u{FFFD}[0m\t\n\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}"
                 .to_owned(),
         }]
     );

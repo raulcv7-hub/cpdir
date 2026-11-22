@@ -7,7 +7,7 @@ use std::hash::BuildHasher;
 use crate::domain::{DirectoryTree, GitContextSnapshot, NodeId, NodeKind};
 use crate::output::git_xml::render_git_context;
 use crate::output::summary_xml::{XmlRenderOptions, render_xml_header_sections};
-use crate::output::xml_escape::{push_escaped_xml_attr, push_escaped_xml_text};
+use crate::output::xml_escape::{push_cdata_xml_body, push_escaped_xml_attr};
 
 /// Errors prevented while assembling the final XML document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,13 +97,17 @@ pub fn render_xml_structure_envelope(tree: &DirectoryTree, abs_root_path: Option
     out
 }
 
-/// Appends a single escaped `<file path="...">...</file>` entry into `out`.
+/// Appends a single `<file path="...">` entry wrapped in `CDATA` (or self-closing if empty).
 pub fn render_selected_file_xml(rel_path: &str, content: &str, out: &mut String) {
     out.push_str("    <file path=\"");
     push_escaped_xml_attr(out, rel_path);
-    out.push_str("\">");
-    push_escaped_xml_text(out, content);
-    out.push_str("</file>\n");
+    if content.is_empty() {
+        out.push_str("\"/>\n");
+    } else {
+        out.push_str("\">");
+        push_cdata_xml_body(out, content);
+        out.push_str("</file>\n");
+    }
 }
 
 fn estimate_output_bytes(tree: &DirectoryTree) -> usize {

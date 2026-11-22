@@ -14,24 +14,46 @@ use proptest::prelude::*;
 use crate::common::workspace::WorkspaceBuilder;
 use crate::common::xml_validator::{ParsedXmlFile, parse_strict_xml};
 
-fn expected_xml10_sanitized(input: &str) -> String {
+const fn is_valid_xml10_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\t' | '\n'
+            | '\r'
+            | '\u{0020}'..='\u{D7FF}'
+            | '\u{E000}'..='\u{FFFD}'
+            | '\u{10000}'..='\u{10FFFF}'
+    )
+}
+
+fn expected_xml10_attr_sanitized(input: &str) -> String {
     input
         .chars()
         .map(|ch| {
-            if matches!(
-                ch,
-                '\t' | '\n'
-                    | '\r'
-                    | '\u{0020}'..='\u{D7FF}'
-                    | '\u{E000}'..='\u{FFFD}'
-                    | '\u{10000}'..='\u{10FFFF}'
-            ) {
+            if is_valid_xml10_char(ch) {
                 ch
             } else {
                 '\u{FFFD}'
             }
         })
         .collect()
+}
+
+fn expected_xml10_body_normalized(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    let _ = chars.next();
+                }
+                out.push('\n');
+            }
+            _ if is_valid_xml10_char(ch) => out.push(ch),
+            _ => out.push('\u{FFFD}'),
+        }
+    }
+    out
 }
 
 fn ntfs_safe_fragment_strategy() -> impl Strategy<Value = String> {
@@ -59,7 +81,7 @@ fn hostile_attr_name_strategy() -> impl Strategy<Value = String> {
 
 proptest! {
     #[test]
-    fn arbitrary_disk_files_roundtrip_bit_for_bit_through_xml_validator(
+    fn arbitrary_disk_files_roundtrip_cleanly_through_xml_validator(
         entries in prop::collection::vec(
             (ntfs_safe_fragment_strategy(), any::<String>()),
             1..10,
@@ -99,25 +121,32 @@ proptest! {
             contents.insert(node_id, ingested);
             expected_files.push(ParsedXmlFile {
                 path: safe_name,
-                content: expected_xml10_sanitized(&disk_body),
+                content: expected_xml10_body_normalized(&disk_body),
             });
         }
 
         let xml = render_strict_xml(&tree, &contents, None).expect("xml write");
+        prop_assert!(!xml.contains("&#xD;"));
         let parsed = parse_strict_xml(&xml).map_err(TestCaseError::fail)?;
         prop_assert_eq!(parsed.files, expected_files);
     }
 
     #[test]
-    fn hostile_in_memory_paths_with_angle_brackets_and_quotes_roundtrip_strictly(
+    fn hostile_in_memory_paths_and_cdata_breakers_roundtrip_strictly(
         dir_name in hostile_attr_name_strategy(),
         file_name in hostile_attr_name_strategy(),
-        body in any::<String>(),
+        raw_body in any::<String>(),
+        inject_cdata_tokens in any::<bool>(),
     ) {
         let mut tree = DirectoryTree::new("hostile&<root>");
         let dir = tree
             .add_dir(DirectoryTree::ROOT, &dir_name, false)
             .expect("dir");
+        let body = if inject_cdata_tokens {
+            format!("]]>{raw_body}</file><cpdir_context>]]]]>")
+        } else {
+            raw_body
+        };
         let file_id = tree
             .add_text_file(
                 dir,
@@ -133,8 +162,8 @@ proptest! {
 
         let mut contents = HashMap::new();
         contents.insert(file_id, body.clone());
-        let expected_path = expected_xml10_sanitized(&format!("{dir_name}/{file_name}"));
-        let expected_body = expected_xml10_sanitized(&body);
+        let expected_path = expected_xml10_attr_sanitized(&format!("{dir_name}/{file_name}"));
+        let expected_body = expected_xml10_body_normalized(&body);
 
         let xml = render_strict_xml(&tree, &contents, None).expect("xml write");
         let parsed = parse_strict_xml(&xml).map_err(TestCaseError::fail)?;

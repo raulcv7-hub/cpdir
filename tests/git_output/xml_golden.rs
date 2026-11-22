@@ -128,11 +128,13 @@ fn build_golden_workspace_fixture() -> GoldenFixture {
 }
 
 #[test]
-fn golden_workspace_preserves_stacked_paths_empty_dirs_badges_and_literal_xml() {
+fn golden_workspace_preserves_stacked_paths_empty_dirs_badges_and_cdata_xml() {
     let f = build_golden_workspace_fixture();
     let xml = render_strict_xml(&f.tree, &f.contents, None).expect("xml render succeeds");
-    let parsed = parse_strict_xml(&xml).expect("strict xml must parse cleanly");
+    assert!(!xml.contains("&#xD;"));
+    assert!(xml.contains("<![CDATA[pub fn helper()"));
 
+    let parsed = parse_strict_xml(&xml).expect("strict xml must parse cleanly");
     assert_eq!(
         parsed.context_summary,
         Some(ParsedContextSummary {
@@ -173,7 +175,7 @@ fn golden_workspace_preserves_stacked_paths_empty_dirs_badges_and_literal_xml() 
             },
             ParsedXmlFile {
                 path: "src/main.rs".to_owned(),
-                content: f.main_body,
+                content: f.main_body.replace("\r\n", "\n"),
             },
             ParsedXmlFile {
                 path: "empty.txt".to_owned(),
@@ -182,6 +184,51 @@ fn golden_workspace_preserves_stacked_paths_empty_dirs_badges_and_literal_xml() 
         ]
     );
     assert!(!xml.contains("API_KEY=secret"));
+}
+
+#[test]
+fn golden_cdata_avoids_double_escaping_in_svgs_scripts_and_crlf_docs() {
+    let svg_body = "<svg viewBox=\"0 0 10 10\"><path d=\"M0 0\"/>&gt;</svg>\r\n";
+    let sh_body = "#!/usr/bin/env bash\r\nsvgo \"$1\" >/dev/null 2>&1\r\n";
+    let bracket_body = "nested ]]> and ]]]]> inside file\n";
+
+    let mut tree = DirectoryTree::new("svg_repo");
+    let svg_id = add_selected(&mut tree, DirectoryTree::ROOT, "icon.svg", 64, 15);
+    let sh_id = add_selected(&mut tree, DirectoryTree::ROOT, "opt.sh", 64, 12);
+    let br_id = add_selected(&mut tree, DirectoryTree::ROOT, "edge.txt", 36, 8);
+
+    let contents = HashMap::from([
+        (svg_id, svg_body.to_owned()),
+        (sh_id, sh_body.to_owned()),
+        (br_id, bracket_body.to_owned()),
+    ]);
+
+    let xml = render_strict_xml(&tree, &contents, None).expect("xml");
+    assert!(xml.contains(r#"<![CDATA[<svg viewBox="0 0 10 10"><path d="M0 0"/>&gt;</svg>"#));
+    assert!(xml.contains(r#"svgo "$1" >/dev/null 2>&1"#));
+    assert!(!xml.contains("&lt;svg"));
+    assert!(!xml.contains("&amp;gt;"));
+    assert!(!xml.contains("&gt;/dev/null"));
+    assert!(!xml.contains("&#xD;"));
+
+    let parsed = parse_strict_xml(&xml).expect("valid cdata xml");
+    assert_eq!(
+        parsed.files,
+        vec![
+            ParsedXmlFile {
+                path: "icon.svg".to_owned(),
+                content: svg_body.replace("\r\n", "\n"),
+            },
+            ParsedXmlFile {
+                path: "opt.sh".to_owned(),
+                content: sh_body.replace("\r\n", "\n"),
+            },
+            ParsedXmlFile {
+                path: "edge.txt".to_owned(),
+                content: bracket_body.to_owned(),
+            },
+        ]
+    );
 }
 
 #[test]
@@ -302,7 +349,7 @@ fn golden_git_context_escapes_hostile_xml_and_handles_empty_sections() {
         recent_commits: vec![GitCommitEntry {
             short_hash: "a1b2c3d".to_owned(),
             subject: "fix: escape <tag> & ]]>".to_owned(),
-            body: Some("line1 <x>\nline2 & \"y\"".to_owned()),
+            body: Some("line1 <x>\r\nline2 & \"y\"".to_owned()),
         }],
         recent_tags: vec![GitTagEntry {
             name: "v0.4.0<beta>".to_owned(),
@@ -315,6 +362,7 @@ fn golden_git_context_escapes_hostile_xml_and_handles_empty_sections() {
     };
 
     let xml = render_strict_xml(&tree, &contents, Some(&git)).expect("render with git");
+    assert!(!xml.contains("&#xD;"));
     let parsed = parse_strict_xml(&xml).expect("git xml parses cleanly");
     assert_eq!(
         parsed.context_summary,

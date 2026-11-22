@@ -119,6 +119,8 @@ fn monorepo_rust_and_nextjs_fixture_prunes_deps_and_rescues_env_local() {
     ));
 
     let xml = render_strict_xml(&scan.tree, &scan.contents, None).expect("xml");
+    assert!(!xml.contains("&lt;Tag"));
+    assert!(!xml.contains("&#xD;"));
     let parsed = parse_strict_xml(&xml).expect("valid xml");
     let summary = parsed.context_summary.expect("context_summary");
     assert_eq!(
@@ -132,7 +134,7 @@ fn monorepo_rust_and_nextjs_fixture_prunes_deps_and_rescues_env_local() {
         parsed
             .files
             .iter()
-            .any(|f| f.path == "apps/web/src/Button.tsx" && f.content == jsx)
+            .any(|f| f.path == "apps/web/src/Button.tsx" && f.content == jsx.replace("\r\n", "\n"))
     );
 }
 

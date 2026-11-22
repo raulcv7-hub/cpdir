@@ -1,16 +1,41 @@
-//! Strict XML 1.0 text and attribute escaping with illegal control-character sanitization.
+//! Strict XML 1.0 escaping, `CDATA` wrapping, and control-character sanitization.
+
+use std::iter::Peekable;
+use std::str::Chars;
 
 pub(crate) fn push_escaped_xml_text(out: &mut String, text: &str) {
-    for ch in text.chars() {
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = next_normalized_xml_char(&mut chars) {
         match ch {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
-            '\r' => out.push_str("&#xD;"),
-            _ if is_valid_xml10_char(ch) => out.push(ch),
-            _ => out.push('\u{FFFD}'),
+            _ => out.push(ch),
         }
     }
+}
+
+pub(crate) fn push_cdata_xml_body(out: &mut String, text: &str) {
+    out.push_str("<![CDATA[");
+    let mut brackets: u8 = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = next_normalized_xml_char(&mut chars) {
+        match ch {
+            ']' => {
+                brackets = brackets.saturating_add(1).min(2);
+                out.push(']');
+            }
+            '>' if brackets == 2 => {
+                out.push_str("]]><![CDATA[>");
+                brackets = 0;
+            }
+            _ => {
+                brackets = 0;
+                out.push(ch);
+            }
+        }
+    }
+    out.push_str("]]>");
 }
 
 pub(crate) fn push_escaped_xml_attr(out: &mut String, attr: &str) {
@@ -28,6 +53,20 @@ pub(crate) fn push_escaped_xml_attr(out: &mut String, attr: &str) {
             _ => out.push('\u{FFFD}'),
         }
     }
+}
+
+fn next_normalized_xml_char(chars: &mut Peekable<Chars<'_>>) -> Option<char> {
+    let ch = chars.next()?;
+    Some(match ch {
+        '\r' => {
+            if chars.peek() == Some(&'\n') {
+                let _ = chars.next();
+            }
+            '\n'
+        }
+        _ if is_valid_xml10_char(ch) => ch,
+        _ => '\u{FFFD}',
+    })
 }
 
 const fn is_valid_xml10_char(ch: char) -> bool {
