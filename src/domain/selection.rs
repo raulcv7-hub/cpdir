@@ -43,6 +43,8 @@ pub enum NaturalExclusion {
     GitIgnore,
     /// Auto-deselected because token count exceeded the configured threshold.
     ExceedsTokenThreshold,
+    /// Excluded by default because it belongs to a re-ingested pruned directory.
+    Pruned,
 }
 
 /// Baseline automatic selection computed from ignore rules and token limits.
@@ -65,6 +67,8 @@ pub enum UnselectedReason {
     GitIgnore,
     /// Omitted due to exceeding the default token ceiling.
     ExceedsTokenThreshold,
+    /// Omitted by default inside a re-ingested pruned dependency or build folder.
+    PrunedDir,
 }
 
 /// Reason a non-text or oversized file cannot be ingested into `<files>`.
@@ -161,6 +165,9 @@ impl TextFileState {
             NaturalSelection::Excluded(NaturalExclusion::ExceedsTokenThreshold) => {
                 Some(UnselectedReason::ExceedsTokenThreshold)
             }
+            NaturalSelection::Excluded(NaturalExclusion::Pruned) => {
+                Some(UnselectedReason::PrunedDir)
+            }
         }
     }
 
@@ -191,5 +198,13 @@ impl TextFileState {
         if matches!(self.natural, NaturalSelection::Included) {
             self.natural = NaturalSelection::Excluded(NaturalExclusion::ExceedsTokenThreshold);
         }
+    }
+
+    /// Marks an otherwise included baseline as [`NaturalExclusion::Pruned`] without user overrides.
+    pub fn mark_pruned(&mut self) {
+        if matches!(self.natural, NaturalSelection::Included) {
+            self.natural = NaturalSelection::Excluded(NaturalExclusion::Pruned);
+        }
+        self.user_override = None;
     }
 }

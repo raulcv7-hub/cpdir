@@ -140,12 +140,12 @@ fn remap_subtree_node(
     match &mut node.kind {
         NodeKind::Directory(dir) => {
             dir.is_expanded = false;
-            dir.folder_override = if offset == 0 { Some(false) } else { None };
+            dir.folder_override = None;
             for cid in &mut dir.children {
                 *cid = NodeId(base_idx + cid.index());
             }
         }
-        NodeKind::TextFile(file) => file.state.set_selected(false),
+        NodeKind::TextFile(file) => file.state.mark_pruned(),
         NodeKind::DiscardedFile(_) => {}
     }
 }

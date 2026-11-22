@@ -1,5 +1,7 @@
 //! Adversarial domain scenarios, 3000-level stack safety, and illegal tree construction tests.
 
+use std::collections::BTreeMap;
+
 use cpdir::domain::metrics::InspectorReason;
 use cpdir::domain::{
     DirectoryTree, FileDiscardReason, FolderSelectionState, InspectorCategory, NaturalExclusion,
@@ -208,6 +210,77 @@ fn deep_nesting_3000_levels_is_stack_safe_and_exact() {
 
     tree.toggle_selection(DirectoryTree::ROOT);
     assert_eq!(tree.compute_metrics().counts.read_files, 0);
+}
+
+#[test]
+fn reingested_pruned_subtree_stays_excluded_on_select_all_default_and_clean_overrides() {
+    let mut tree = DirectoryTree::new("repo");
+    let src = tree.add_dir(DirectoryTree::ROOT, "src", true).expect("src");
+    add_text(
+        &mut tree,
+        src,
+        "main.rs",
+        100,
+        0,
+        NaturalSelection::Included,
+    );
+    tree.record_pruned_dir("vendor", PrunedDirReason::DependencyOrVcs);
+
+    let mut subtree = DirectoryTree::new("vendor");
+    let dep = add_text(
+        &mut subtree,
+        DirectoryTree::ROOT,
+        "dep.rs",
+        500,
+        0,
+        NaturalSelection::Included,
+    );
+    let _ = dep;
+    add_text(
+        &mut subtree,
+        DirectoryTree::ROOT,
+        "ignored.log",
+        30,
+        0,
+        NaturalSelection::Excluded(NaturalExclusion::GitIgnore),
+    );
+
+    let outcome = tree
+        .merge_pruned_subtree("vendor", subtree)
+        .expect("merge vendor");
+    assert!(!tree.has_user_overrides());
+    assert_eq!(tree.collect_overrides(), BTreeMap::new());
+    assert_eq!(tree.compute_metrics().counts.read_files, 1);
+
+    // Resetting or cycling All/None must never auto-enable re-ingested pruned files.
+    tree.unselect_all();
+    tree.select_all_default();
+    assert_eq!(tree.compute_metrics().counts.read_files, 1);
+    assert_eq!(
+        tree.inspector_items(InspectorCategory::Unread)
+            .into_iter()
+            .map(|i| (i.rel_path, i.reason))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "vendor/dep.rs".to_owned(),
+                InspectorReason::UnreadFile(UnselectedReason::PrunedDir),
+            ),
+            (
+                "vendor/ignored.log".to_owned(),
+                InspectorReason::UnreadFile(UnselectedReason::GitIgnore),
+            ),
+        ]
+    );
+
+    // Explicit selection of a file inside vendor persists only that delta.
+    let vendor_dep = outcome.id_map[1].1;
+    tree.toggle_selection(vendor_dep);
+    assert_eq!(tree.compute_metrics().counts.read_files, 2);
+    assert_eq!(
+        tree.collect_overrides(),
+        BTreeMap::from([("vendor/dep.rs".to_owned(), true)])
+    );
 }
 
 #[test]

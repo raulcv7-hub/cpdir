@@ -155,7 +155,7 @@ fn process_rescan_dir(
             match read_bounded_utf8(&entry.abs_path, config.max_file_bytes) {
                 ReadFileOutcome::Text { byte_len, content } => {
                     let mut state = TextFileState::new(decision.to_natural_selection());
-                    state.set_selected(false);
+                    state.mark_pruned();
                     let file_id = tree.add_text_file(
                         parent_id,
                         &entry.name,

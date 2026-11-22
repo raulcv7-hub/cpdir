@@ -236,6 +236,7 @@ const fn unselected_tag(reason: UnselectedReason) -> &'static str {
         UnselectedReason::DotIgnore => ".ignore",
         UnselectedReason::GitIgnore => ".gitignore",
         UnselectedReason::ExceedsTokenThreshold => ">50k",
+        UnselectedReason::PrunedDir => "pruned",
     }
 }
 

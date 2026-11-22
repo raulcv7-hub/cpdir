@@ -199,6 +199,7 @@ const fn unselected_badge(reason: UnselectedReason) -> (&'static str, Style) {
             (">50k", Style::new().fg(Color::Rgb(255, 95, 95)))
         }
         UnselectedReason::UserExcluded => ("off", Style::new().fg(Color::Rgb(150, 155, 165))),
+        UnselectedReason::PrunedDir => ("pruned", Style::new().fg(Color::Rgb(150, 155, 165))),
     }
 }
 
