@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    name: Build & Publish Windows Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Inspect Rust toolchain
+        run: rustup show
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package archive and compute SHA256 checksum
+        shell: pwsh
+        run: |
+          $binPath = "target/release/cpdir.exe"
+          if (-not (Test-Path -LiteralPath $binPath)) {
+            throw "Release binary not found at $binPath"
+          }
+          $zipName = "cpdir-windows-x86_64.zip"
+          Compress-Archive -Path $binPath -DestinationPath $zipName -Force
+          $hash = (Get-FileHash -Path $zipName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $zipName" | Out-File -FilePath "$zipName.sha256" -Encoding ascii -NoNewline
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ github.ref_name }} `
+            cpdir-windows-x86_64.zip `
+            cpdir-windows-x86_64.zip.sha256 `
+            --title "cpdir ${{ github.ref_name }}" `
+            --generate-notes

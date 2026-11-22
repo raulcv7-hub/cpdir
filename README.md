@@ -16,30 +16,39 @@ Interactive Windows 11 TUI and CLI utility that inspects a repository tree, coun
 
 ## Installation (Windows 11)
 
-### Option 1: PowerShell Script (from cloned repository)
+### Option 1: One-Liner PowerShell Install (No Rust required)
 
-Installs `cpdir.exe` into `%LOCALAPPDATA%\Programs\cpdir` and adds it to your User `PATH` without modifying Explorer Registry keys:
+Downloads the latest release asset from GitHub Releases, checks its SHA-256 hash, extracts `cpdir.exe` to `%LOCALAPPDATA%\Programs\cpdir`, and adds it to your User `PATH` (without modifying Explorer Registry keys):
+
+```powershell
+irm https://raw.githubusercontent.com/raulcv7-hub/cpdir/main/scripts/install-windows.ps1 | iex
+```
+
+### Option 2: Cargo (from crates.io or Git)
+
+Once published to `crates.io`:
+```powershell
+cargo install cpdir --locked
+```
+
+Or directly from GitHub:
+```powershell
+cargo install --git https://github.com/raulcv7-hub/cpdir --locked
+```
+
+### Option 3: Local Script (from cloned repository)
+
+Installs `cpdir.exe` into `%LOCALAPPDATA%\Programs\cpdir` and adds it to your User `PATH`:
 
 ```powershell
 .\scripts\install-windows.ps1
 ```
 
 Optional switches:
-
 - `-UseCargoInstall`: compiles and installs into `%USERPROFILE%\.cargo\bin` via `cargo install --path . --locked --force`.
 - `-WithContextMenu`: additionally registers the optional `HKCU` Windows Explorer context menu (`cpdir install --yes`).
 
 Open a new terminal after installation so Windows refreshes `PATH`.
-
-### Option 2: Cargo
-
-```powershell
-cargo install --path . --locked
-```
-
-### Option 3: Standalone Binary
-
-`target\release\cpdir.exe` is self-contained with no external DLL dependencies; copying it into any directory on your `PATH` is sufficient.
 
 ## CLI Usage
 
@@ -70,22 +79,22 @@ Context-menu integration is strictly opt-in, requires no administrator privilege
 
 ### Keyboard
 
-| Keys                            | Action                                                 |
-| ------------------------------- | ------------------------------------------------------ |
-| `Up` / `Down`, `j` / `k`        | Move cursor                                            |
-| `PgUp` / `PgDn`, `Home` / `End` | Scroll page or jump to start/end                       |
-| `Right` / `l`, `Left` / `h`     | Expand/enter folder, collapse or jump to parent        |
-| `Tab`                           | Fold or unfold directory under cursor                  |
-| `c` / `e`                       | Collapse all subfolders / Expand all folders           |
-| `Space`                         | Toggle selection on file or folder subtree recursively |
-| `a`                             | Toggle All (safe natural defaults) / None              |
-| `u`                             | Unselect all files                                     |
-| `i` / `n`, `d`, `s`             | Open Inspector on `Unread`, `Discarded`, or `Secrets`  |
-| `g`                             | Toggle `<git_context>` (inside Git repositories)       |
-| `p`                             | Toggle opt-in `root_path` in `<context_summary>`       |
-| `?`                             | Toggle help overlay                                    |
-| `Enter`                         | Render XML 1.0 and copy to clipboard                   |
-| `Esc`, `q`, `Ctrl+C`            | Exit without modifying clipboard or saved state        |
+| Keys | Action |
+|---|---|
+| `Up` / `Down`, `j` / `k` | Move cursor |
+| `PgUp` / `PgDn`, `Home` / `End` | Scroll page or jump to start/end |
+| `Right` / `l`, `Left` / `h` | Expand/enter folder, collapse or jump to parent |
+| `Tab` | Fold or unfold directory under cursor |
+| `c` / `e` | Collapse all subfolders / Expand all folders |
+| `Space` | Toggle selection on file or folder subtree recursively |
+| `a` | Toggle All (safe natural defaults) / None |
+| `u` | Unselect all files |
+| `i` / `n`, `d`, `s` | Open Inspector on `Unread`, `Discarded`, or `Secrets` |
+| `g` | Toggle `<git_context>` (inside Git repositories) |
+| `p` | Toggle opt-in `root_path` in `<context_summary>` |
+| `?` | Toggle help overlay |
+| `Enter` | Render XML 1.0 and copy to clipboard |
+| `Esc`, `q`, `Ctrl+C` | Exit without modifying clipboard or saved state |
 
 Inside the **Inspector** modal: `Tab`/`BackTab`/`Left`/`Right` cycle tabs, `Space` toggles unread/secret items or loads `[PRUNED]` folders on demand (collapsed and unselected, capped at 2,000 entries), `Enter` reveals and jumps to the entry in the tree, and `Esc`/`q` closes the modal.
 
