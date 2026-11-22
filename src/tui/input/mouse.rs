@@ -1,45 +1,23 @@
 //! Mouse event dispatcher for wheel scrolling, row selection, and tab clicks.
 
 use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::Rect;
 
 use crate::domain::{InspectorTab, NodeKind};
-use crate::tui::app_state::{TuiAppState, UiMode};
+use crate::tui::input::layout::TuiViewportAreas;
+use crate::tui::state::{TuiAppState, UiMode};
 
-/// Bounding boxes of interactive viewports stored during render for mouse hit-testing.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TuiViewportAreas {
-    /// Bounding rectangle of the main directory tree panel (including borders).
-    pub tree_body: Rect,
-    /// Bounding rectangle of the inspector modal tab header bar.
-    pub inspector_tabs: Rect,
-    /// Bounding rectangle of the inspector modal entry list viewport.
-    pub inspector_body: Rect,
-    /// Exact rendered hit-test rectangles for `[Unread, Discarded, Secrets]` tabs.
-    pub inspector_tab_rects: [Rect; 3],
-    pub(crate) inspector_scroll_top: usize,
-}
-
-impl TuiViewportAreas {
-    /// Returns the rendered hit-test rectangle for the requested inspector `tab`.
-    #[must_use]
-    pub const fn inspector_tab_rect(&self, tab: InspectorTab) -> Rect {
-        match tab {
-            InspectorTab::Unread => self.inspector_tab_rects[0],
-            InspectorTab::Discarded => self.inspector_tab_rects[1],
-            InspectorTab::Secrets => self.inspector_tab_rects[2],
-        }
-    }
-}
-
-/// Applies a mouse event to [`TuiAppState`], returning `true` if state changed and needs redraw.
+/// Applies a mouse event to [`TuiAppState`] using `layout`, returning `true` when redraw is needed.
 #[must_use]
-pub fn handle_mouse_event(state: &mut TuiAppState, mouse: MouseEvent) -> bool {
+pub fn handle_mouse_event(
+    state: &mut TuiAppState,
+    layout: &TuiViewportAreas,
+    mouse: MouseEvent,
+) -> bool {
     match mouse.kind {
         MouseEventKind::ScrollDown => handle_mouse_scroll(state, 2),
         MouseEventKind::ScrollUp => handle_mouse_scroll(state, -2),
         MouseEventKind::Down(MouseButton::Left) => {
-            handle_mouse_left_click(state, mouse.column, mouse.row)
+            handle_mouse_left_click(state, layout, mouse.column, mouse.row)
         }
         _ => false,
     }
@@ -49,9 +27,9 @@ fn handle_mouse_scroll(state: &mut TuiAppState, delta: isize) -> bool {
     match state.mode() {
         UiMode::Tree => {
             if delta.is_negative() {
-                state.page_up(delta.unsigned_abs());
+                state.nav_mut().page_up(delta.unsigned_abs());
             } else {
-                state.page_down(delta.cast_unsigned());
+                state.nav_mut().page_down(delta.cast_unsigned());
             }
             true
         }
@@ -63,10 +41,15 @@ fn handle_mouse_scroll(state: &mut TuiAppState, delta: isize) -> bool {
     }
 }
 
-fn handle_mouse_left_click(state: &mut TuiAppState, col: u16, row: u16) -> bool {
+fn handle_mouse_left_click(
+    state: &mut TuiAppState,
+    layout: &TuiViewportAreas,
+    col: u16,
+    row: u16,
+) -> bool {
     match state.mode() {
-        UiMode::Tree => handle_tree_click(state, col, row),
-        UiMode::Inspector { .. } => handle_inspector_click(state, col, row),
+        UiMode::Tree => handle_tree_click(state, layout, col, row),
+        UiMode::Inspector { .. } => handle_inspector_click(state, layout, col, row),
         UiMode::Help => {
             state.close_modal();
             true
@@ -75,8 +58,13 @@ fn handle_mouse_left_click(state: &mut TuiAppState, col: u16, row: u16) -> bool 
     }
 }
 
-fn handle_tree_click(state: &mut TuiAppState, col: u16, row: u16) -> bool {
-    let area = state.viewport_areas.tree_body;
+fn handle_tree_click(
+    state: &mut TuiAppState,
+    layout: &TuiViewportAreas,
+    col: u16,
+    row: u16,
+) -> bool {
+    let area = layout.tree_body;
     let min_x = area.x.saturating_add(1);
     let max_x = area.x.saturating_add(area.width.saturating_sub(1));
     let min_y = area.y.saturating_add(1);
@@ -99,7 +87,7 @@ fn handle_tree_click(state: &mut TuiAppState, col: u16, row: u16) -> bool {
         NodeKind::Directory(_)
     );
 
-    state.cursor = target_idx;
+    state.nav_mut().set_cursor(target_idx);
     if is_dir && col_offset >= fold_glyph_start && col_offset < fold_glyph_start + 2 {
         state.toggle_expand_at_index(target_idx);
         return true;
@@ -109,18 +97,18 @@ fn handle_tree_click(state: &mut TuiAppState, col: u16, row: u16) -> bool {
     true
 }
 
-fn handle_inspector_click(state: &mut TuiAppState, col: u16, row: u16) -> bool {
+fn handle_inspector_click(
+    state: &mut TuiAppState,
+    layout: &TuiViewportAreas,
+    col: u16,
+    row: u16,
+) -> bool {
     let tabs = [
         InspectorTab::Unread,
         InspectorTab::Discarded,
         InspectorTab::Secrets,
     ];
-    for (rect, tab) in state
-        .viewport_areas
-        .inspector_tab_rects
-        .into_iter()
-        .zip(tabs)
-    {
+    for (rect, tab) in layout.inspector_tab_rects.into_iter().zip(tabs) {
         if rect.width > 0
             && row == rect.y
             && col >= rect.x
@@ -131,18 +119,17 @@ fn handle_inspector_click(state: &mut TuiAppState, col: u16, row: u16) -> bool {
         }
     }
 
-    let body_area = state.viewport_areas.inspector_body;
+    let body_area = layout.inspector_body;
     if col >= body_area.x
         && col < body_area.x.saturating_add(body_area.width)
         && row >= body_area.y
         && row < body_area.y.saturating_add(body_area.height)
     {
         let offset = usize::from(row - body_area.y);
-        let scroll_top = state.viewport_areas.inspector_scroll_top;
-        let Some(ins) = state.active_inspector() else {
+        let Some(ins) = state.inspector() else {
             return false;
         };
-        let target_idx = scroll_top.saturating_add(offset);
+        let target_idx = layout.inspector_scroll_top.saturating_add(offset);
         if target_idx < ins.entries().len() {
             state.set_inspector_cursor(target_idx);
             state.toggle_inspector_selection();

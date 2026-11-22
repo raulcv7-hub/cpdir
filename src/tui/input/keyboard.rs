@@ -3,7 +3,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::domain::InspectorTab;
-use crate::tui::app_state::{TuiAppState, UiMode};
+use crate::tui::state::{TuiAppState, UiMode};
 
 /// Applies a single keyboard event to [`TuiAppState`], ignoring Win32 `Release` events.
 pub fn handle_key_event(state: &mut TuiAppState, key: KeyEvent) {
@@ -29,12 +29,12 @@ pub fn handle_key_event(state: &mut TuiAppState, key: KeyEvent) {
 
 fn handle_tree_key(state: &mut TuiAppState, code: KeyCode) {
     match code {
-        KeyCode::Up | KeyCode::Char('k' | 'K') => state.move_up(),
-        KeyCode::Down | KeyCode::Char('j' | 'J') => state.move_down(),
-        KeyCode::Home => state.move_home(),
-        KeyCode::End => state.move_end(),
-        KeyCode::PageUp => state.page_up(15),
-        KeyCode::PageDown => state.page_down(15),
+        KeyCode::Up | KeyCode::Char('k' | 'K') => state.nav_mut().move_up(),
+        KeyCode::Down | KeyCode::Char('j' | 'J') => state.nav_mut().move_down(),
+        KeyCode::Home => state.nav_mut().move_home(),
+        KeyCode::End => state.nav_mut().move_end(),
+        KeyCode::PageUp => state.nav_mut().page_up(15),
+        KeyCode::PageDown => state.nav_mut().page_down(15),
         KeyCode::Right | KeyCode::Char('l' | 'L') => state.expand_or_enter_at_cursor(),
         KeyCode::Left | KeyCode::Char('h' | 'H') => state.collapse_or_jump_parent(),
         KeyCode::Tab => state.toggle_expand_at_cursor(),

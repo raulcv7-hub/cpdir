@@ -1,30 +1,34 @@
 //! Responsive tree viewport, exact token/git counters, scrollbar, and colorized key legend.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
 
-use crate::tui::app_state::TuiAppState;
+use crate::tui::input::layout::{TuiViewportAreas, tree_screen_chunks};
 use crate::tui::render_row::build_tree_row_line;
+use crate::tui::state::TuiAppState;
 use crate::tui::theme::{
     format_token_count, sanitize_tui_label, secret_marker_style, total_tokens_style,
 };
 
-/// Renders the responsive header summary, scrollable tree, and colorized key-binding legend.
-pub fn render_tree_view(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) {
-    let header_height = if area.height >= 12 { 4 } else { 3 };
-    let chunks = Layout::vertical([
-        Constraint::Length(header_height),
-        Constraint::Min(3),
-        Constraint::Length(3),
-    ])
-    .split(area);
+/// Renders the responsive header summary, scrollable tree, and key legend without retaining hit-boxes.
+pub fn render_tree_view(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
+    render_tree_view_with_layout(frame, area, state, &mut TuiViewportAreas::default());
+}
 
-    state.viewport_areas.tree_body = chunks[1];
+/// Renders the responsive header summary, scrollable tree, and key legend, recording `layout`.
+pub fn render_tree_view_with_layout(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &TuiAppState,
+    layout: &mut TuiViewportAreas,
+) {
+    let chunks = tree_screen_chunks(area);
+    layout.tree_body = chunks[1];
 
     render_header(frame, chunks[0], state);
     render_tree_body(frame, chunks[1], state);
@@ -75,13 +79,12 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
     frame.render_widget(header, area);
 }
 
-fn render_tree_body(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) {
+fn render_tree_body(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
     let viewport_height = usize::from(area.height.saturating_sub(2));
     let inner_width = usize::from(area.width.saturating_sub(2));
-    state.ensure_cursor_visible(viewport_height);
-
-    let scroll = state.scroll_offset();
     let total_rows = state.visible_rows().len();
+    let max_scroll = total_rows.saturating_sub(viewport_height);
+    let scroll = state.scroll_offset().min(max_scroll);
     let end = scroll.saturating_add(viewport_height).min(total_rows);
 
     let lines: Vec<Line<'static>> = state.visible_rows()[scroll..end]
@@ -103,7 +106,6 @@ fn render_tree_body(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) 
     frame.render_widget(tree_widget, area);
 
     if total_rows > viewport_height && viewport_height > 0 {
-        let max_scroll = total_rows.saturating_sub(viewport_height);
         let mut sb_state = ScrollbarState::new(max_scroll + 1).position(scroll);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)

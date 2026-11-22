@@ -7,7 +7,7 @@ use crate::domain::{
     FileDiscardReason, InspectorEntry, InspectorEntryKind, NodeId, NodeKind, PrunedDirReason,
     SecretRuleKind, UnselectedReason,
 };
-use crate::tui::app_state::TuiAppState;
+use crate::tui::state::TuiAppState;
 use crate::tui::theme::{
     cursor_glyph_style, cursor_row_style, format_token_count, sanitize_tui_label,
     secret_marker_style, secret_rule_label,

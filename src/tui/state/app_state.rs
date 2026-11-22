@@ -1,8 +1,8 @@
-//! Pure TUI state machine driving selection, modals, and exit intents.
+//! Core TUI state coordinating directory selection, Git token accounting, modals, and exit intents.
 
 use crate::domain::{DirectoryTree, InspectorTab, TreeMetrics, VisibleRow};
-use crate::tui::inspector_state::InspectorState;
-use crate::tui::mouse::TuiViewportAreas;
+use crate::tui::state::inspector::InspectorState;
+use crate::tui::state::tree_nav::TreeNavigator;
 
 /// Active view layer controlling key handling and modal overlays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,20 +45,17 @@ pub(super) enum ActiveModal {
     ConfirmSecrets { active_secret_files: usize },
 }
 
-/// Pure UI state holding the directory tree, cached metrics, cursor, and modal modes.
+/// Pure UI state holding the directory tree, cached metrics, tree navigator, and modal state.
 #[derive(Debug, Clone)]
 pub struct TuiAppState {
     pub(super) tree: DirectoryTree,
     metrics: TreeMetrics,
-    pub(super) visible_rows: Vec<VisibleRow>,
-    pub(super) cursor: usize,
-    pub(super) scroll_offset: usize,
+    pub(super) nav: TreeNavigator,
     has_git_context: bool,
     include_git_context: bool,
     git_context_tokens: usize,
     pub(super) pending_reingest: Option<String>,
     pub(super) modal: ActiveModal,
-    pub(super) viewport_areas: TuiViewportAreas,
     exit_action: Option<AppExitAction>,
 }
 
@@ -67,19 +64,16 @@ impl TuiAppState {
     #[must_use]
     pub fn new(tree: DirectoryTree, has_git_context: bool) -> Self {
         let metrics = tree.compute_metrics();
-        let visible_rows = tree.visible_rows();
+        let nav = TreeNavigator::new(&tree);
         Self {
             tree,
             metrics,
-            visible_rows,
-            cursor: 0,
-            scroll_offset: 0,
+            nav,
             has_git_context,
             include_git_context: has_git_context,
             git_context_tokens: 0,
             pending_reingest: None,
             modal: ActiveModal::None,
-            viewport_areas: TuiViewportAreas::default(),
             exit_action: None,
         }
     }
@@ -102,28 +96,42 @@ impl TuiAppState {
         &self.metrics
     }
 
+    /// Returns an immutable reference to the tree cursor/scroll navigator.
+    #[must_use]
+    pub const fn nav(&self) -> &TreeNavigator {
+        &self.nav
+    }
+
+    /// Returns a mutable reference to the tree cursor/scroll navigator.
+    pub const fn nav_mut(&mut self) -> &mut TreeNavigator {
+        &mut self.nav
+    }
+
     /// Returns flattened visible rows matching currently expanded directories.
     #[must_use]
     pub fn visible_rows(&self) -> &[VisibleRow] {
-        &self.visible_rows
+        self.nav.visible_rows()
     }
 
     /// Returns the zero-based cursor row inside [`Self::visible_rows`].
     #[must_use]
     pub const fn cursor(&self) -> usize {
-        self.cursor
+        self.nav.cursor()
     }
 
     /// Returns the top visible row index of the tree viewport.
     #[must_use]
     pub const fn scroll_offset(&self) -> usize {
-        self.scroll_offset
+        self.nav.scroll_offset()
     }
 
-    /// Returns the last rendered interactive viewport regions for hit-testing.
+    /// Returns the active [`InspectorState`] if the inspector modal is open.
     #[must_use]
-    pub const fn viewport_areas(&self) -> TuiViewportAreas {
-        self.viewport_areas
+    pub const fn inspector(&self) -> Option<&InspectorState> {
+        match &self.modal {
+            ActiveModal::Inspector(ins) => Some(ins),
+            _ => None,
+        }
     }
 
     /// Returns `true` when the workspace is inside a valid Git repository.
@@ -202,7 +210,7 @@ impl TuiAppState {
 
     /// Toggles selection for the file or subtree under the cursor.
     pub fn toggle_selection_at_cursor(&mut self) {
-        if let Some(row) = self.visible_rows.get(self.cursor).copied() {
+        if let Some(row) = self.nav.current_row() {
             self.tree.toggle_selection(row.node_id);
             self.refresh_metrics();
         }
@@ -268,11 +276,6 @@ impl TuiAppState {
         } else {
             self.exit_action = Some(AppExitAction::CopyToClipboard);
         }
-    }
-
-    /// Confirms copying to clipboard even though active secret warnings are present.
-    pub fn confirm_copy_with_secrets(&mut self) {
-        self.exit_action = Some(AppExitAction::CopyToClipboard);
     }
 
     /// Confirms copying to clipboard from any confirmation modal.

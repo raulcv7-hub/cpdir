@@ -1,135 +1,97 @@
-//! State and in-place actions for the unified Unread / Discarded / Secrets inspector modal.
+//! Coordinated TUI state transitions spanning the domain tree, navigator, and inspector modal.
 
 use crate::domain::{
-    DirectoryTree, InspectorEntry, InspectorEntryKind, InspectorTab, MergeSubtreeOutcome,
-    TreeMetrics,
+    DirectoryTree, InspectorEntry, InspectorEntryKind, InspectorTab, MergeSubtreeOutcome, NodeId,
+    NodeKind,
 };
-use crate::tui::app_state::{ActiveModal, TuiAppState};
-
-/// Cached interactive state backing the unified inspector modal.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InspectorState {
-    tab: InspectorTab,
-    entries: Vec<InspectorEntry>,
-    cursor: usize,
-    scroll: usize,
-    viewport_height: usize,
-    status_note: Option<String>,
-}
-
-impl InspectorState {
-    #[must_use]
-    pub(crate) fn new(tree: &DirectoryTree, metrics: &TreeMetrics, tab: InspectorTab) -> Self {
-        Self {
-            tab,
-            entries: tree.inspector_entries(metrics, tab),
-            cursor: 0,
-            scroll: 0,
-            viewport_height: 14,
-            status_note: None,
-        }
-    }
-
-    #[must_use]
-    pub(crate) const fn tab(&self) -> InspectorTab {
-        self.tab
-    }
-
-    #[must_use]
-    pub(crate) const fn cursor(&self) -> usize {
-        self.cursor
-    }
-
-    #[must_use]
-    pub(crate) const fn scroll(&self) -> usize {
-        self.scroll
-    }
-
-    #[must_use]
-    pub(crate) fn entries(&self) -> &[InspectorEntry] {
-        &self.entries
-    }
-
-    #[must_use]
-    pub(crate) fn status_note(&self) -> Option<&str> {
-        self.status_note.as_deref()
-    }
-
-    pub(crate) fn set_status_note(&mut self, note: impl Into<String>) {
-        self.status_note = Some(note.into());
-    }
-
-    pub(crate) fn ensure_cursor_visible(&mut self, viewport_height: usize) {
-        if viewport_height == 0 {
-            return;
-        }
-        self.viewport_height = viewport_height;
-        self.clamp_scroll();
-    }
-
-    pub(crate) fn restore_cursor(&mut self, prev_cursor: usize) {
-        if let Some(max_idx) = self.entries.len().checked_sub(1) {
-            self.cursor = prev_cursor.min(max_idx);
-            self.clamp_scroll();
-        } else {
-            self.cursor = 0;
-            self.scroll = 0;
-        }
-    }
-
-    pub(crate) fn move_cursor(&mut self, delta: isize) {
-        let Some(max_idx) = self.entries.len().checked_sub(1) else {
-            self.cursor = 0;
-            self.scroll = 0;
-            return;
-        };
-        self.cursor = if delta.is_negative() {
-            self.cursor.saturating_sub(delta.unsigned_abs())
-        } else {
-            self.cursor
-                .saturating_add(delta.cast_unsigned())
-                .min(max_idx)
-        };
-        self.clamp_scroll();
-    }
-
-    pub(crate) const fn move_home(&mut self) {
-        self.cursor = 0;
-        self.scroll = 0;
-    }
-
-    pub(crate) fn move_end(&mut self) {
-        if let Some(max_idx) = self.entries.len().checked_sub(1) {
-            self.cursor = max_idx;
-            self.clamp_scroll();
-        }
-    }
-
-    pub(crate) fn selected_entry(&self) -> Option<&InspectorEntry> {
-        self.entries.get(self.cursor)
-    }
-
-    fn clamp_scroll(&mut self) {
-        let vh = self.viewport_height.max(1);
-        let max_start = self.entries.len().saturating_sub(vh);
-        self.scroll = self.scroll.min(max_start);
-        if self.cursor < self.scroll {
-            self.scroll = self.cursor;
-        } else if self.cursor >= self.scroll + vh {
-            self.scroll = self.cursor + 1 - vh;
-        }
-    }
-}
+use crate::tui::state::app_state::{ActiveModal, TuiAppState};
+use crate::tui::state::inspector::InspectorState;
 
 impl TuiAppState {
+    /// Synchronizes tree and inspector scroll offsets against current rendered viewport heights.
+    pub fn prepare_viewports(&mut self, tree_height: usize, inspector_height: usize) {
+        self.nav.ensure_visible(tree_height);
+        if let ActiveModal::Inspector(ins) = &mut self.modal {
+            ins.ensure_visible(inspector_height);
+        }
+    }
+
+    /// Toggles fold/unfold on the directory under the cursor.
+    pub fn toggle_expand_at_cursor(&mut self) {
+        if let Some(row) = self.nav.current_row()
+            && self.tree.toggle_expand(row.node_id)
+        {
+            self.nav.refresh(&self.tree);
+        }
+    }
+
+    /// Toggles fold/unfold on the directory at `visible_idx`.
+    pub fn toggle_expand_at_index(&mut self, visible_idx: usize) {
+        if let Some(row) = self.nav.row_at(visible_idx)
+            && self.tree.toggle_expand(row.node_id)
+        {
+            self.nav.refresh(&self.tree);
+        }
+    }
+
+    /// Collapses every subdirectory while keeping root expanded.
+    pub fn collapse_all(&mut self) {
+        self.tree.collapse_all_subdirs();
+        self.nav.refresh(&self.tree);
+    }
+
+    /// Expands every directory across the tree.
+    pub fn expand_all(&mut self) {
+        self.tree.expand_all_dirs();
+        self.nav.refresh(&self.tree);
+    }
+
+    /// Expands a collapsed directory under the cursor, or steps into its first child.
+    pub fn expand_or_enter_at_cursor(&mut self) {
+        let Some(row) = self.nav.current_row() else {
+            return;
+        };
+        if let Some(node) = self.tree.get(row.node_id)
+            && let NodeKind::Directory(dir) = &node.kind
+        {
+            if !dir.is_expanded {
+                self.tree.toggle_expand(row.node_id);
+                self.nav.refresh(&self.tree);
+            } else if !dir.children.is_empty() {
+                self.nav.move_down();
+            }
+        }
+    }
+
+    /// Collapses an expanded directory under the cursor, or jumps cursor to its parent folder.
+    pub fn collapse_or_jump_parent(&mut self) {
+        let Some(row) = self.nav.current_row() else {
+            return;
+        };
+        let Some(node) = self.tree.get(row.node_id) else {
+            return;
+        };
+        if let NodeKind::Directory(dir) = &node.kind
+            && dir.is_expanded
+            && row.node_id != DirectoryTree::ROOT
+        {
+            self.tree.toggle_expand(row.node_id);
+            self.nav.refresh(&self.tree);
+            return;
+        }
+        if let Some(parent_id) = node.parent {
+            self.nav.jump_to_node(parent_id);
+        }
+    }
+
     /// Opens the unified inspector modal directly on `tab`.
     pub fn open_inspector_tab(&mut self, tab: InspectorTab) {
         let prev_vh = match &self.modal {
-            ActiveModal::Inspector(ins) => ins.viewport_height,
+            ActiveModal::Inspector(ins) => ins.viewport_height(),
             _ => 14,
         };
         let mut next = InspectorState::new(&self.tree, self.metrics(), tab);
-        next.viewport_height = prev_vh;
+        next.set_viewport_height(prev_vh);
         self.modal = ActiveModal::Inspector(next);
     }
 
@@ -150,7 +112,7 @@ impl TuiAppState {
     /// Sets the highlighted entry index inside the active inspector modal.
     pub fn set_inspector_cursor(&mut self, cursor: usize) {
         if let ActiveModal::Inspector(ins) = &mut self.modal {
-            ins.restore_cursor(cursor);
+            ins.set_cursor(cursor);
         }
     }
 
@@ -178,7 +140,7 @@ impl TuiAppState {
     /// Toggles selection in `Unread`/`Secrets`, or requests re-ingestion for `[PRUNED]` dirs.
     pub fn toggle_inspector_selection(&mut self) {
         enum Action {
-            ToggleNode(crate::domain::NodeId),
+            ToggleNode(NodeId),
             ReingestPruned(String),
             RejectNonText,
         }
@@ -223,8 +185,8 @@ impl TuiAppState {
         };
         if let Some(node_id) = target {
             self.tree.expand_ancestors(node_id);
-            self.refresh_visible_rows();
-            self.jump_to_node(node_id);
+            self.nav.refresh(&self.tree);
+            self.nav.jump_to_node(node_id);
             self.modal = ActiveModal::None;
         }
     }
@@ -250,7 +212,7 @@ impl TuiAppState {
     ) -> Option<MergeSubtreeOutcome> {
         let outcome = self.tree.merge_pruned_subtree(rel_path, subtree)?;
         self.refresh_metrics();
-        self.refresh_visible_rows();
+        self.nav.refresh(&self.tree);
 
         let note = if truncated {
             format!("Loaded {rel_path}/ (collapsed, unselected; truncated at entry cap)")
@@ -260,8 +222,8 @@ impl TuiAppState {
 
         let next_ins = if let ActiveModal::Inspector(ins) = &self.modal {
             let mut next = InspectorState::new(&self.tree, self.metrics(), ins.tab());
-            next.viewport_height = ins.viewport_height;
-            next.restore_cursor(ins.cursor());
+            next.set_viewport_height(ins.viewport_height());
+            next.set_cursor(ins.cursor());
             next.set_status_note(note);
             Some(next)
         } else {
@@ -271,18 +233,5 @@ impl TuiAppState {
             self.modal = ActiveModal::Inspector(next);
         }
         Some(outcome)
-    }
-
-    pub(crate) fn ensure_inspector_cursor_visible(&mut self, viewport_height: usize) {
-        if let ActiveModal::Inspector(ins) = &mut self.modal {
-            ins.ensure_cursor_visible(viewport_height);
-        }
-    }
-
-    pub(crate) const fn active_inspector(&self) -> Option<&InspectorState> {
-        match &self.modal {
-            ActiveModal::Inspector(ins) => Some(ins),
-            _ => None,
-        }
     }
 }

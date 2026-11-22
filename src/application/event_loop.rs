@@ -9,7 +9,8 @@ use crate::application::terminal::TerminalGuard;
 use crate::application::workspace::WorkspaceSession;
 use crate::config::limits::DEFAULT_RESCAN_MAX_ENTRIES;
 use crate::tui::{
-    TuiAppState, handle_key_event, handle_mouse_event, render_active_modal, render_tree_view,
+    TuiAppState, TuiViewportAreas, handle_key_event, handle_mouse_event,
+    render_active_modal_with_layout, render_tree_view_with_layout,
 };
 
 pub(super) fn run_tui_event_loop(
@@ -17,6 +18,7 @@ pub(super) fn run_tui_event_loop(
     state: &mut TuiAppState,
 ) -> Result<(), AppError> {
     let mut guard = TerminalGuard::enter()?;
+    let mut layout = TuiViewportAreas::default();
     let mut needs_draw = true;
 
     while state.exit_action().is_none() {
@@ -25,21 +27,22 @@ pub(super) fn run_tui_event_loop(
                 .terminal_mut()
                 .draw(|frame| {
                     let area = frame.area();
-                    render_tree_view(frame, area, state);
-                    render_active_modal(frame, area, state);
+                    TuiViewportAreas::sync_scroll(area, state);
+                    render_tree_view_with_layout(frame, area, state, &mut layout);
+                    render_active_modal_with_layout(frame, area, state, &mut layout);
                 })
                 .map_err(|err| AppError::TerminalIo(err.to_string()))?;
             needs_draw = false;
         }
 
         let first = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
-        let mut reingest_needed = dispatch_app_event(state, &first, &mut needs_draw);
+        let mut reingest_needed = dispatch_app_event(state, &layout, &first, &mut needs_draw);
 
         while state.exit_action().is_none()
             && event::poll(Duration::ZERO).map_err(|err| AppError::TerminalIo(err.to_string()))?
         {
             let next = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
-            if dispatch_app_event(state, &next, &mut needs_draw) {
+            if dispatch_app_event(state, &layout, &next, &mut needs_draw) {
                 reingest_needed = true;
             }
         }
@@ -54,7 +57,12 @@ pub(super) fn run_tui_event_loop(
     Ok(())
 }
 
-fn dispatch_app_event(state: &mut TuiAppState, ev: &Event, needs_draw: &mut bool) -> bool {
+fn dispatch_app_event(
+    state: &mut TuiAppState,
+    layout: &TuiViewportAreas,
+    ev: &Event,
+    needs_draw: &mut bool,
+) -> bool {
     match ev {
         Event::Key(key) => {
             if key.kind != KeyEventKind::Release {
@@ -63,7 +71,7 @@ fn dispatch_app_event(state: &mut TuiAppState, ev: &Event, needs_draw: &mut bool
             }
         }
         Event::Mouse(mouse) => {
-            if handle_mouse_event(state, *mouse) {
+            if handle_mouse_event(state, layout, *mouse) {
                 *needs_draw = true;
             }
         }

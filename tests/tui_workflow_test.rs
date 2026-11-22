@@ -14,8 +14,8 @@ use cpdir::scanner::{ScanConfig, ScanResult, rescan_pruned_dir, scan_directory};
 use cpdir::security::{SecretScanner, populate_secret_hits};
 use cpdir::tokens::{TokenCounter, populate_token_counts};
 use cpdir::tui::{
-    AppExitAction, InspectorTab, TuiAppState, UiMode, handle_key_event, handle_mouse_event,
-    render_active_modal, render_tree_view,
+    AppExitAction, InspectorTab, TuiAppState, TuiViewportAreas, UiMode, handle_key_event,
+    handle_mouse_event, render_active_modal_with_layout, render_tree_view_with_layout,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -24,14 +24,24 @@ use ratatui::crossterm::event::{
 };
 use ratatui::style::Color;
 
-fn draw_screen(terminal: &mut Terminal<TestBackend>, state: &mut TuiAppState) {
+fn draw_screen_with_layout(
+    terminal: &mut Terminal<TestBackend>,
+    state: &mut TuiAppState,
+    layout: &mut TuiViewportAreas,
+) {
     terminal
         .draw(|frame| {
             let area = frame.area();
-            render_tree_view(frame, area, state);
-            render_active_modal(frame, area, state);
+            TuiViewportAreas::sync_scroll(area, state);
+            render_tree_view_with_layout(frame, area, state, layout);
+            render_active_modal_with_layout(frame, area, state, layout);
         })
         .expect("draw test backend");
+}
+
+fn draw_screen(terminal: &mut Terminal<TestBackend>, state: &mut TuiAppState) {
+    let mut layout = TuiViewportAreas::default();
+    draw_screen_with_layout(terminal, state, &mut layout);
 }
 
 fn buffer_to_string(terminal: &Terminal<TestBackend>) -> String {
@@ -76,9 +86,10 @@ fn release_key(state: &mut TuiAppState, code: KeyCode) {
     handle_key_event(state, ev);
 }
 
-fn click_left(state: &mut TuiAppState, column: u16, row: u16) -> bool {
+fn click_left(state: &mut TuiAppState, layout: &TuiViewportAreas, column: u16, row: u16) -> bool {
     handle_mouse_event(
         state,
+        layout,
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column,
@@ -550,15 +561,17 @@ fn tui_mouse_wheel_and_tree_click_navigation() {
 
     let scan = scan_and_tokenize(&ws);
     let mut state = TuiAppState::new(scan.tree, false);
+    let mut layout = TuiViewportAreas::default();
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("test terminal");
 
-    draw_screen(&mut terminal, &mut state);
+    draw_screen_with_layout(&mut terminal, &mut state, &mut layout);
     assert_eq!(state.cursor(), 0);
     assert_eq!(state.metrics().counts.read_files, 3);
 
     // Mouse wheel down advances the tree cursor.
     let changed = handle_mouse_event(
         &mut state,
+        &layout,
         MouseEvent {
             kind: MouseEventKind::ScrollDown,
             column: 10,
@@ -570,22 +583,22 @@ fn tui_mouse_wheel_and_tree_click_navigation() {
     assert_eq!(state.cursor(), 2);
 
     // Left click on `docs/` row moves cursor and toggles its selection.
-    let target_row_y = state.viewport_areas().tree_body.y + 2;
-    assert!(click_left(&mut state, 15, target_row_y));
-    draw_screen(&mut terminal, &mut state);
+    let target_row_y = layout.tree_body.y + 2;
+    assert!(click_left(&mut state, &layout, 15, target_row_y));
+    draw_screen_with_layout(&mut terminal, &mut state, &mut layout);
     assert_eq!(state.cursor(), 1);
     assert_eq!(state.metrics().counts.read_files, 2);
 
     // Left click on fold triangle of depth-1 `docs/`: border (1) + cursor (2) + guide (2) = +5.
-    let fold_col = state.viewport_areas().tree_body.x + 5;
-    let dir_row_y = state.viewport_areas().tree_body.y + 2;
-    assert!(click_left(&mut state, fold_col, dir_row_y));
-    draw_screen(&mut terminal, &mut state);
+    let fold_col = layout.tree_body.x + 5;
+    let dir_row_y = layout.tree_body.y + 2;
+    assert!(click_left(&mut state, &layout, fold_col, dir_row_y));
+    draw_screen_with_layout(&mut terminal, &mut state, &mut layout);
     assert_eq!(state.visible_rows().len(), 5);
 
     // Click again unfolds `docs/`.
-    assert!(click_left(&mut state, fold_col, dir_row_y));
-    draw_screen(&mut terminal, &mut state);
+    assert!(click_left(&mut state, &layout, fold_col, dir_row_y));
+    draw_screen_with_layout(&mut terminal, &mut state, &mut layout);
     assert_eq!(state.visible_rows().len(), 6);
 }
 
@@ -598,15 +611,16 @@ fn tui_mouse_inspector_tab_and_row_clicks() {
 
     let scan = scan_and_tokenize(&ws);
     let mut state = TuiAppState::new(scan.tree, false);
+    let mut layout = TuiViewportAreas::default();
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("test terminal");
 
-    draw_screen(&mut terminal, &mut state);
-    let docs_row_y = state.viewport_areas().tree_body.y + 2;
-    assert!(click_left(&mut state, 15, docs_row_y));
+    draw_screen_with_layout(&mut terminal, &mut state, &mut layout);
+    let docs_row_y = layout.tree_body.y + 2;
+    assert!(click_left(&mut state, &layout, 15, docs_row_y));
     assert_eq!(state.metrics().counts.read_files, 2);
 
     press_key(&mut state, KeyCode::Char('i'));
-    draw_screen(&mut terminal, &mut state);
+    draw_screen_with_layout(&mut terminal, &mut state, &mut layout);
     assert_eq!(
         state.mode(),
         UiMode::Inspector {
@@ -615,11 +629,14 @@ fn tui_mouse_inspector_tab_and_row_clicks() {
         }
     );
 
-    let disc_rect = state
-        .viewport_areas()
-        .inspector_tab_rect(InspectorTab::Discarded);
-    assert!(click_left(&mut state, disc_rect.x + 1, disc_rect.y));
-    draw_screen(&mut terminal, &mut state);
+    let disc_rect = layout.inspector_tab_rect(InspectorTab::Discarded);
+    assert!(click_left(
+        &mut state,
+        &layout,
+        disc_rect.x + 1,
+        disc_rect.y
+    ));
+    draw_screen_with_layout(&mut terminal, &mut state, &mut layout);
     assert_eq!(
         state.mode(),
         UiMode::Inspector {
@@ -629,9 +646,10 @@ fn tui_mouse_inspector_tab_and_row_clicks() {
     );
 
     // Clicking empty whitespace on the right side of the tab bar must not switch tabs.
-    let tabs_bar = state.viewport_areas().inspector_tabs;
+    let tabs_bar = layout.inspector_tabs;
     assert!(!click_left(
         &mut state,
+        &layout,
         tabs_bar.x + tabs_bar.width - 1,
         tabs_bar.y
     ));
@@ -644,14 +662,17 @@ fn tui_mouse_inspector_tab_and_row_clicks() {
     ));
 
     // Switch back to Unread via click and toggle `[DIR] docs/` ON by clicking row 0 in body.
-    let unread_rect = state
-        .viewport_areas()
-        .inspector_tab_rect(InspectorTab::Unread);
-    assert!(click_left(&mut state, unread_rect.x + 1, unread_rect.y));
-    draw_screen(&mut terminal, &mut state);
+    let unread_rect = layout.inspector_tab_rect(InspectorTab::Unread);
+    assert!(click_left(
+        &mut state,
+        &layout,
+        unread_rect.x + 1,
+        unread_rect.y
+    ));
+    draw_screen_with_layout(&mut terminal, &mut state, &mut layout);
 
-    let body = state.viewport_areas().inspector_body;
-    assert!(click_left(&mut state, body.x + 2, body.y));
+    let body = layout.inspector_body;
+    assert!(click_left(&mut state, &layout, body.x + 2, body.y));
     assert_eq!(state.metrics().counts.read_files, 3);
 }
 
@@ -673,14 +694,15 @@ fn tui_mouse_inspector_tall_viewport_scroll_click_targets_exact_row() {
     }
 
     let mut state = TuiAppState::new(tree, false);
+    let mut layout = TuiViewportAreas::default();
     let mut terminal = Terminal::new(TestBackend::new(100, 36)).expect("tall test terminal");
 
     press_key(&mut state, KeyCode::Char('i'));
-    draw_screen(&mut terminal, &mut state);
+    draw_screen_with_layout(&mut terminal, &mut state, &mut layout);
     press_key(&mut state, KeyCode::End);
-    draw_screen(&mut terminal, &mut state);
+    draw_screen_with_layout(&mut terminal, &mut state, &mut layout);
 
-    let body = state.viewport_areas().inspector_body;
+    let body = layout.inspector_body;
     assert!(
         usize::from(body.height) > 14,
         "test requires inspector body taller than old nominal 14"
@@ -693,7 +715,7 @@ fn tui_mouse_inspector_tall_viewport_scroll_click_targets_exact_row() {
     assert!(expected_top_idx > 0);
 
     // Click first visible row in the scrolled inspector body -> must toggle exact file at scroll_top.
-    assert!(click_left(&mut state, body.x + 2, body.y));
+    assert!(click_left(&mut state, &layout, body.x + 2, body.y));
 
     let expected_name = format!("ign_{expected_top_idx:02}.log");
     let selected_names: Vec<&str> = state

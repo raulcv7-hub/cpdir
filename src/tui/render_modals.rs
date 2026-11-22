@@ -1,7 +1,7 @@
 //! Modal overlays for the unified inspector and confirmation/help dialogs.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -9,17 +9,28 @@ use ratatui::widgets::{
 };
 
 use crate::domain::InspectorTab;
-use crate::tui::app_state::{TuiAppState, UiMode};
+use crate::tui::input::layout::{TuiViewportAreas, inspector_sections};
 use crate::tui::render_dialogs::{
     render_confirm_empty_modal, render_confirm_secrets_modal, render_help_modal,
 };
 use crate::tui::render_inspector_row::build_inspector_entry_line;
+use crate::tui::state::{TuiAppState, UiMode};
 
-/// Renders the active modal overlay on top of the main tree view when `mode` is not [`UiMode::Tree`].
-pub fn render_active_modal(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) {
+/// Renders the active modal overlay without retaining hit-boxes when `mode` is not [`UiMode::Tree`].
+pub fn render_active_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
+    render_active_modal_with_layout(frame, area, state, &mut TuiViewportAreas::default());
+}
+
+/// Renders the active modal overlay on top of the main tree view, recording `layout`.
+pub fn render_active_modal_with_layout(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &TuiAppState,
+    layout: &mut TuiViewportAreas,
+) {
     match state.mode() {
         UiMode::Tree => {}
-        UiMode::Inspector { tab, .. } => render_inspector_modal(frame, area, state, tab),
+        UiMode::Inspector { tab, .. } => render_inspector_modal(frame, area, state, layout, tab),
         UiMode::Help => render_help_modal(frame, area, state),
         UiMode::ConfirmEmptyCopy => render_confirm_empty_modal(frame, area),
         UiMode::ConfirmSecrets {
@@ -33,95 +44,76 @@ pub fn render_active_modal(frame: &mut Frame<'_>, area: Rect, state: &mut TuiApp
 fn render_inspector_modal(
     frame: &mut Frame<'_>,
     area: Rect,
-    state: &mut TuiAppState,
+    state: &TuiAppState,
+    layout: &mut TuiViewportAreas,
     tab: InspectorTab,
 ) {
-    let popup = centered_percent_rect(86, 80, area);
-    frame.render_widget(Clear, popup);
+    let Some(ins) = state.inspector() else {
+        return;
+    };
+    let has_status = ins.status_note().is_some();
+    let Some(sections) = inspector_sections(area, has_status) else {
+        return;
+    };
 
+    frame.render_widget(Clear, sections.popup);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Inspector - [Tab] Switch  [Space] Toggle/Load  [Enter] Jump  [Esc] Close ")
         .style(Style::new().bg(Color::Rgb(24, 28, 38)));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    if inner.height < 3 || inner.width < 10 {
-        return;
-    }
-
-    let status_h = u16::from(
-        state
-            .active_inspector()
-            .and_then(|i| i.status_note())
-            .is_some(),
-    );
-    let sections = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Min(1),
-        Constraint::Length(status_h),
-    ])
-    .split(inner);
-
-    let viewport_h = usize::from(sections[1].height);
-    state.ensure_inspector_cursor_visible(viewport_h);
+    frame.render_widget(block, sections.popup);
 
     let counts = state.metrics().counts;
     let tab_rects = render_tab_header(
         frame,
-        sections[0],
+        sections.tabs,
         tab,
         counts.unread_files,
         counts.discarded_items,
         counts.total_secret_files,
     );
 
-    state.viewport_areas.inspector_tabs = sections[0];
-    state.viewport_areas.inspector_tab_rects = tab_rects;
-    state.viewport_areas.inspector_body = sections[1];
+    layout.inspector_tabs = sections.tabs;
+    layout.inspector_tab_rects = tab_rects;
+    layout.inspector_body = sections.body;
 
-    let (total, start, lines, status_note) = {
-        let Some(ins) = state.active_inspector() else {
-            return;
-        };
-        let entries = ins.entries();
-        let total = entries.len();
-        let (start, end) = compute_visible_window(ins.cursor(), ins.scroll(), total, viewport_h);
+    let entries = ins.entries();
+    let total = entries.len();
+    let viewport_h = usize::from(sections.body.height);
+    let (start, end) = compute_visible_window(ins.cursor(), ins.scroll(), total, viewport_h);
+    layout.inspector_scroll_top = start;
 
-        let lines: Vec<Line<'static>> = if entries.is_empty() {
-            vec![
-                Line::raw(""),
-                Line::styled(
-                    format!("  No {} entries in this workspace.", tab_name(tab)),
-                    Style::new().fg(Color::Rgb(150, 155, 165)),
-                ),
-            ]
-        } else {
-            entries[start..end]
-                .iter()
-                .enumerate()
-                .map(|(offset, entry)| {
-                    build_inspector_entry_line(state, entry, start + offset == ins.cursor())
-                })
-                .collect()
-        };
-        (total, start, lines, ins.status_note().map(str::to_owned))
+    let lines: Vec<Line<'static>> = if entries.is_empty() {
+        vec![
+            Line::raw(""),
+            Line::styled(
+                format!("  No {} entries in this workspace.", tab_name(tab)),
+                Style::new().fg(Color::Rgb(150, 155, 165)),
+            ),
+        ]
+    } else {
+        entries[start..end]
+            .iter()
+            .enumerate()
+            .map(|(offset, entry)| {
+                build_inspector_entry_line(state, entry, start + offset == ins.cursor())
+            })
+            .collect()
     };
 
-    state.viewport_areas.inspector_scroll_top = start;
-    frame.render_widget(Paragraph::new(lines), sections[1]);
+    frame.render_widget(Paragraph::new(lines), sections.body);
 
-    if let Some(note) = status_note {
+    if let Some(note) = ins.status_note() {
         let status_line = Line::styled(
             format!(" {note}"),
             Style::new()
                 .fg(Color::Rgb(110, 210, 255))
                 .add_modifier(Modifier::BOLD),
         );
-        frame.render_widget(Paragraph::new(status_line), sections[2]);
+        frame.render_widget(Paragraph::new(status_line), sections.status);
     }
 
-    if total > viewport_h && viewport_h > 0 && popup.height >= 7 {
+    if total > viewport_h && viewport_h > 0 && sections.popup.height >= 7 {
         let max_scroll = total.saturating_sub(viewport_h);
         let mut sb_state = ScrollbarState::new(max_scroll + 1).position(start);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
@@ -130,7 +122,7 @@ fn render_inspector_modal(
             .thumb_style(Style::new().fg(Color::Rgb(110, 210, 255)));
         frame.render_stateful_widget(
             scrollbar,
-            popup.inner(Margin {
+            sections.popup.inner(Margin {
                 vertical: 3,
                 horizontal: 0,
             }),
@@ -217,25 +209,6 @@ fn compute_visible_window(
         start = cursor + 1 - height;
     }
     (start, start.saturating_add(height).min(total))
-}
-
-fn centered_percent_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let margin_y = 100u16.saturating_sub(percent_y) / 2;
-    let margin_x = 100u16.saturating_sub(percent_x) / 2;
-
-    let vertical = Layout::vertical([
-        Constraint::Percentage(margin_y),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage(margin_y),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage(margin_x),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage(margin_x),
-    ])
-    .split(vertical[1])[1]
 }
 
 const fn tab_name(tab: InspectorTab) -> &'static str {

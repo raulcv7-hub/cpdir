@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::domain::{NodeId, NodeKind};
-use crate::tui::app_state::TuiAppState;
+use crate::tui::state::TuiAppState;
 use crate::tui::theme::{sanitize_tui_label, secret_marker_style, secret_rule_label};
 
 const MAX_MODAL_SECRET_PATHS: usize = 5;

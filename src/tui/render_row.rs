@@ -7,7 +7,7 @@ use crate::domain::{
     DirectoryTree, FileDiscardReason, FolderSelectionState, NodeId, NodeKind, UnselectedReason,
     VisibleRow, WeightTier,
 };
-use crate::tui::app_state::TuiAppState;
+use crate::tui::state::TuiAppState;
 use crate::tui::theme::{
     NodeVisualKind, cursor_glyph_style, cursor_row_style, format_token_count, node_label_style,
     sanitize_tui_label, secret_marker_style, tree_guide_style,
