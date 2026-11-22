@@ -1,6 +1,7 @@
 //! On-demand pruned directory re-ingestion from the `Discarded` inspector tab.
 
 use cpdir::application::analyze_tree_contents;
+use cpdir::domain::InspectorTab;
 use cpdir::output::render_strict_xml;
 use cpdir::scanner::{ScanConfig, rescan_pruned_dir};
 use cpdir::tui::TuiAppState;
@@ -98,4 +99,22 @@ fn tui_discarded_tab_reingests_pruned_dir_collapsed_and_unselected() {
     let emitted: Vec<String> = parsed.files.into_iter().map(|f| f.path).collect();
     assert!(emitted.contains(&"apps/web/dist/bundle.js".to_owned()));
     assert!(!emitted.contains(&"apps/web/dist/nested/style.css".to_owned()));
+}
+
+#[test]
+fn tui_inspector_sanitizes_bidi_and_control_chars_in_status_note() {
+    let ws = WorkspaceBuilder::new();
+    ws.write_text("src/main.rs", "fn main() {}\n");
+
+    let scan = scan_and_analyze(&ws);
+    let mut state = TuiAppState::new(scan.tree, false);
+    let mut terminal = Terminal::new(TestBackend::new(100, 22)).expect("test terminal");
+
+    state.open_inspector_tab(InspectorTab::Discarded);
+    state.set_inspector_status("Failed \u{202E}bad\x1B/");
+    let screen = draw_and_dump(&mut terminal, &mut state);
+
+    assert!(screen.contains("Failed \u{FFFD}bad\u{FFFD}/"));
+    assert!(!screen.contains('\u{202E}'));
+    assert!(!screen.contains('\x1B'));
 }

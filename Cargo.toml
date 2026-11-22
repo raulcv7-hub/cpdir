@@ -1,6 +1,6 @@
 [package]
 name = "cpdir"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.100.0"
 description = "Interactive Windows 11 TUI to inspect a directory tree and copy strict XML context to the clipboard"
@@ -23,7 +23,11 @@ proptest = "1.12"
 quick-xml = "0.42"
 tempfile = "3.27"
 
+[profile.dev]
+panic = "unwind"
+
 [profile.release]
+panic = "unwind"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"

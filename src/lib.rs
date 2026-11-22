@@ -1,6 +1,5 @@
 //! Core library crate for `cpdir`.
 
-pub mod app;
 pub mod application;
 pub mod cli;
 pub mod config;

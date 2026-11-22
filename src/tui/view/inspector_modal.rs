@@ -13,6 +13,7 @@ use crate::tui::input::layout::{TuiViewportAreas, inspector_sections};
 use crate::tui::state::TuiAppState;
 use crate::tui::view::inspector_row::build_inspector_entry_line;
 use crate::tui::view::inspector_tabs::{compute_visible_window, render_tab_header, tab_name};
+use crate::tui::view::theme::sanitize_tui_label;
 
 pub(super) fn render_inspector_modal(
     frame: &mut Frame<'_>,
@@ -77,8 +78,9 @@ pub(super) fn render_inspector_modal(
     frame.render_widget(Paragraph::new(lines), sections.body);
 
     if let Some(note) = ins.status_note() {
+        let clean_note = sanitize_tui_label(note);
         let status_line = Line::styled(
-            format!(" {note}"),
+            format!(" {clean_note}"),
             Style::new()
                 .fg(Color::Rgb(110, 210, 255))
                 .add_modifier(Modifier::BOLD),

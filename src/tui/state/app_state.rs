@@ -1,49 +1,10 @@
-//! Core TUI state coordinating directory selection, Git token accounting, modals, and exit intents.
+//! Core TUI state coordinating directory metrics, navigation, context accounting, and modals.
 
-use crate::domain::{DirectoryTree, InspectorTab, TreeMetrics, VisibleRow};
+use crate::domain::{DirectoryTree, TreeMetrics, VisibleRow};
+use crate::tui::state::context_tokens::ContextTokenState;
 use crate::tui::state::inspector::InspectorState;
+use crate::tui::state::modes::{ActiveModal, AppExitAction, UiMode};
 use crate::tui::state::tree_nav::TreeNavigator;
-
-/// Active view layer controlling key handling and modal overlays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UiMode {
-    /// Primary interactive directory tree view.
-    Tree,
-    /// Unified tabbed inspector listing Unread, Discarded, or Secrets entries.
-    Inspector {
-        /// Active tab currently displayed inside the inspector.
-        tab: InspectorTab,
-        /// Top visible row offset inside the modal list.
-        scroll: usize,
-    },
-    /// Quick-reference keybindings and color-legend modal overlay.
-    Help,
-    /// Confirmation prompt when pressing `Enter` with zero selected files.
-    ConfirmEmptyCopy,
-    /// Confirmation prompt displayed on `Enter` when selected files contain potential secrets.
-    ConfirmSecrets {
-        /// Number of selected files carrying `[!]` warnings.
-        active_secret_files: usize,
-    },
-}
-
-/// Terminal outcome emitted when the interactive event loop terminates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppExitAction {
-    /// Render strict XML and copy it to the Windows clipboard.
-    CopyToClipboard,
-    /// Exit cleanly without modifying the clipboard.
-    Cancelled,
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum ActiveModal {
-    None,
-    Inspector(InspectorState),
-    Help,
-    ConfirmEmptyCopy,
-    ConfirmSecrets { active_secret_files: usize },
-}
 
 /// Pure UI state holding the directory tree, cached metrics, tree navigator, and modal state.
 #[derive(Debug, Clone)]
@@ -51,9 +12,7 @@ pub struct TuiAppState {
     pub(super) tree: DirectoryTree,
     metrics: TreeMetrics,
     pub(super) nav: TreeNavigator,
-    has_git_context: bool,
-    include_git_context: bool,
-    git_context_tokens: usize,
+    context: ContextTokenState,
     pub(super) pending_reingest: Option<String>,
     pub(super) modal: ActiveModal,
     exit_action: Option<AppExitAction>,
@@ -69,9 +28,7 @@ impl TuiAppState {
             tree,
             metrics,
             nav,
-            has_git_context,
-            include_git_context: has_git_context,
-            git_context_tokens: 0,
+            context: ContextTokenState::new(has_git_context),
             pending_reingest: None,
             modal: ActiveModal::None,
             exit_action: None,
@@ -137,63 +94,47 @@ impl TuiAppState {
     /// Returns `true` when the workspace is inside a valid Git repository.
     #[must_use]
     pub const fn has_git_context(&self) -> bool {
-        self.has_git_context
+        self.context.has_git_context()
     }
 
     /// Returns `true` when `<git_context>` will be included in the copied XML.
     #[must_use]
     pub const fn include_git_context(&self) -> bool {
-        self.has_git_context && self.include_git_context
+        self.context.include_git_context()
     }
 
     /// Stores the `o200k_base` token count of `<git_context>` for live header updates.
     pub const fn set_git_context_tokens(&mut self, tokens: usize) {
-        self.git_context_tokens = tokens;
+        self.context.set_git_context_tokens(tokens);
     }
 
     /// Returns the `o200k_base` token count contributed by `<git_context>` when enabled.
     #[must_use]
     pub const fn git_context_tokens(&self) -> usize {
-        self.git_context_tokens
+        self.context.git_context_tokens()
     }
 
     /// Returns total selected file tokens plus active `<git_context>` tokens.
     #[must_use]
     pub const fn total_effective_tokens(&self) -> usize {
-        if self.include_git_context() {
-            self.metrics
-                .counts
-                .selected_tokens
-                .saturating_add(self.git_context_tokens)
-        } else {
-            self.metrics.counts.selected_tokens
-        }
+        self.context
+            .total_effective_tokens(self.metrics.counts.selected_tokens)
     }
 
     /// Overrides the initial Git toggle state (e.g., from persisted directory settings).
-    pub fn set_include_git_context(&mut self, enabled: bool) {
-        if self.has_git_context {
-            self.include_git_context = enabled;
-        }
+    pub const fn set_include_git_context(&mut self, enabled: bool) {
+        self.context.set_include_git_context(enabled);
+    }
+
+    /// Toggles inclusion of `<git_context>` when inside a Git repository.
+    pub const fn toggle_git_context(&mut self) {
+        self.context.toggle_git_context();
     }
 
     /// Returns the current UI mode (main tree or active modal).
     #[must_use]
     pub const fn mode(&self) -> UiMode {
-        match &self.modal {
-            ActiveModal::None => UiMode::Tree,
-            ActiveModal::Inspector(ins) => UiMode::Inspector {
-                tab: ins.tab(),
-                scroll: ins.scroll(),
-            },
-            ActiveModal::Help => UiMode::Help,
-            ActiveModal::ConfirmEmptyCopy => UiMode::ConfirmEmptyCopy,
-            ActiveModal::ConfirmSecrets {
-                active_secret_files,
-            } => UiMode::ConfirmSecrets {
-                active_secret_files: *active_secret_files,
-            },
-        }
+        self.modal.to_ui_mode()
     }
 
     /// Returns the exit decision once the user confirms or cancels.
@@ -204,51 +145,8 @@ impl TuiAppState {
 
     /// Returns `true` if an on-demand pruned directory re-ingest has been requested.
     #[must_use]
-    pub fn has_pending_reingest(&self) -> bool {
+    pub const fn has_pending_reingest(&self) -> bool {
         self.pending_reingest.is_some()
-    }
-
-    /// Toggles selection for the file or subtree under the cursor.
-    pub fn toggle_selection_at_cursor(&mut self) {
-        if let Some(row) = self.nav.current_row() {
-            self.tree.toggle_selection(row.node_id);
-            self.refresh_metrics();
-        }
-    }
-
-    /// Toggles between deselecting all files (when at clean defaults) and restoring safe defaults.
-    pub fn toggle_all_selection(&mut self) {
-        if self.metrics.counts.read_files > 0 && !self.tree.has_user_overrides() {
-            self.unselect_all();
-        } else {
-            self.select_all_default();
-        }
-    }
-
-    /// Resets all text files to safe natural selection defaults (`Select All`).
-    pub fn select_all_default(&mut self) {
-        self.tree.select_all_default();
-        self.refresh_metrics();
-    }
-
-    /// Deselects all readable text files (`Unselect All`).
-    pub fn unselect_all(&mut self) {
-        self.tree.unselect_all();
-        self.refresh_metrics();
-    }
-
-    /// Deselects all currently selected files carrying secret findings and returns to tree.
-    pub fn exclude_active_secret_files(&mut self) {
-        self.tree.unselect_secret_files();
-        self.refresh_metrics();
-        self.modal = ActiveModal::None;
-    }
-
-    /// Toggles inclusion of `<git_context>` when inside a Git repository.
-    pub fn toggle_git_context(&mut self) {
-        if self.has_git_context {
-            self.include_git_context = !self.include_git_context;
-        }
     }
 
     /// Toggles the `?` quick-reference help modal overlay.
@@ -279,12 +177,12 @@ impl TuiAppState {
     }
 
     /// Confirms copying to clipboard from any confirmation modal.
-    pub fn confirm_copy_anyway(&mut self) {
+    pub const fn confirm_copy_anyway(&mut self) {
         self.exit_action = Some(AppExitAction::CopyToClipboard);
     }
 
     /// Cancels and exits the TUI without touching the clipboard.
-    pub fn cancel_exit(&mut self) {
+    pub const fn cancel_exit(&mut self) {
         self.exit_action = Some(AppExitAction::Cancelled);
     }
 

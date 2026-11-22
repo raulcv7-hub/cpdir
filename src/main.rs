@@ -2,7 +2,7 @@
 
 use std::process::ExitCode;
 
-use cpdir::app::{RunOutcome, run_interactive};
+use cpdir::application::{RunOutcome, run_interactive};
 use cpdir::cli::{CliCommand, parse_cli_args, usage_text};
 use cpdir::output::SystemClipboard;
 use cpdir::package_version;

@@ -1,10 +1,14 @@
 //! Pure TUI state machines decoupled from `ratatui` rendering and `crossterm` events.
 
-mod actions;
 pub mod app_state;
+mod context_tokens;
 pub mod inspector;
+mod inspector_actions;
+pub mod modes;
+mod tree_actions;
 pub mod tree_nav;
 
-pub use app_state::{AppExitAction, TuiAppState, UiMode};
+pub use app_state::TuiAppState;
 pub use inspector::InspectorState;
+pub use modes::{AppExitAction, UiMode};
 pub use tree_nav::TreeNavigator;

@@ -105,7 +105,10 @@ impl WorkspaceSession {
                 }
             };
 
-        let _ = analyze_tree_contents(&mut sub.tree, &sub.contents);
+        if let Err(err) = analyze_tree_contents(&mut sub.tree, &sub.contents) {
+            state.set_inspector_status(format!("Failed to analyze {rel_path}/: {err}"));
+            return true;
+        }
 
         if let Some(outcome) = state.apply_reingested_dir(&rel_path, sub.tree, sub.truncated) {
             for (old_id, new_id) in outcome.id_map {

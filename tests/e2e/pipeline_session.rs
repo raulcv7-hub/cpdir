@@ -143,7 +143,7 @@ fn workspace_session_cancel_and_hydration_failure_leave_clipboard_untouched() {
 }
 
 #[test]
-fn workspace_session_surfaces_non_directory_and_clipboard_errors() {
+fn workspace_session_surfaces_non_directory_deleted_reingest_and_clipboard_errors() {
     let ws = WorkspaceBuilder::new();
     let state_ws = WorkspaceBuilder::new();
     let plain = ws.write_text("not_a_dir.txt", "hello");
@@ -159,6 +159,7 @@ fn workspace_session_surfaces_non_directory_and_clipboard_errors() {
     assert!(matches!(err, AppError::Scan(ScanError::NotADirectory(_))));
 
     ws.write_text("app.rs", "fn app() {}\n");
+    ws.write_text("vendor/dep.rs", "pub fn dep() {}\n");
     let (mut session, mut state) = WorkspaceSession::open(
         ws.root(),
         store.clone(),
@@ -166,6 +167,18 @@ fn workspace_session_surfaces_non_directory_and_clipboard_errors() {
         GitContextConfig::default(),
     )
     .expect("open ws");
+
+    state.open_inspector_tab(InspectorTab::Discarded);
+    state.toggle_inspector_selection();
+    fs::remove_dir_all(ws.root().join("vendor")).expect("delete vendor before reingest");
+    assert!(session.reingest_pending(&mut state, DEFAULT_RESCAN_MAX_ENTRIES));
+    let note = state
+        .inspector()
+        .and_then(|ins| ins.status_note())
+        .expect("status note on deleted pruned dir");
+    assert!(note.starts_with("Failed to load vendor/:"));
+
+    state.close_modal();
     state.request_copy();
 
     let failing_clip = RecordingClipboard {

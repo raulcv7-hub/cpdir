@@ -6,7 +6,7 @@ use std::io::Read;
 use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 
-use crate::config::defaults::is_known_binary_extension;
+use crate::config::rules::is_known_binary_extension;
 use crate::domain::FileDiscardReason;
 
 #[cfg(any(windows, test))]
