@@ -1,11 +1,30 @@
-//! Shared scan, analysis, and tree lookup helpers reused across integration test suites.
+//! Shared scan, analysis, tree lookup, and mock clipboard helpers reused across test suites.
 
-use common_ws::WorkspaceBuilder;
+use std::cell::RefCell;
+
 use cpdir::application::analyze_tree_contents;
 use cpdir::domain::{DirectoryTree, NodeId, NodeKind};
+use cpdir::output::{ClipboardError, ClipboardWriter};
 use cpdir::scanner::{ScanConfig, ScanResult, scan_directory};
 
-use crate::common::workspace as common_ws;
+use crate::common::workspace::WorkspaceBuilder;
+
+/// In-memory [`ClipboardWriter`] recording every copy payload or injecting an error.
+#[derive(Default)]
+pub(crate) struct RecordingClipboard {
+    pub(crate) copied: RefCell<Vec<String>>,
+    pub(crate) fail_with: Option<ClipboardError>,
+}
+
+impl ClipboardWriter for RecordingClipboard {
+    fn copy_text(&self, text: &str) -> Result<(), ClipboardError> {
+        if let Some(err) = &self.fail_with {
+            return Err(err.clone());
+        }
+        self.copied.borrow_mut().push(text.to_owned());
+        Ok(())
+    }
+}
 
 /// Scans `ws` with default config and populates token counts and secret findings.
 pub(crate) fn scan_and_analyze(ws: &WorkspaceBuilder) -> ScanResult {

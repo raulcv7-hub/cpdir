@@ -1,35 +1,19 @@
 //! End-to-end orchestration tests for `WorkspaceSession` without requiring a physical TTY.
 
-use std::cell::RefCell;
 use std::fs;
 
 use cpdir::application::{AppError, RunOutcome, WorkspaceSession};
 use cpdir::config::limits::DEFAULT_RESCAN_MAX_ENTRIES;
 use cpdir::domain::{FileDiscardReason, InspectorTab};
 use cpdir::git::GitContextConfig;
-use cpdir::output::{ClipboardError, ClipboardWriter};
+use cpdir::output::ClipboardError;
 use cpdir::scanner::{ContentHydrationError, ScanConfig, ScanError};
 use cpdir::state::MemoryStore;
 
 use crate::common::git_repo::GitRepoHarness;
+use crate::common::scan_helpers::RecordingClipboard;
 use crate::common::workspace::WorkspaceBuilder;
 use crate::common::xml_validator::parse_strict_xml;
-
-#[derive(Default)]
-struct RecordingClipboard {
-    copied: RefCell<Vec<String>>,
-    fail_with: Option<ClipboardError>,
-}
-
-impl ClipboardWriter for RecordingClipboard {
-    fn copy_text(&self, text: &str) -> Result<(), ClipboardError> {
-        if let Some(err) = &self.fail_with {
-            return Err(err.clone());
-        }
-        self.copied.borrow_mut().push(text.to_owned());
-        Ok(())
-    }
-}
 
 #[test]
 fn workspace_session_open_reingest_export_and_memory_roundtrip() {
@@ -185,8 +169,8 @@ fn workspace_session_surfaces_non_directory_and_clipboard_errors() {
     state.request_copy();
 
     let failing_clip = RecordingClipboard {
-        copied: RefCell::new(Vec::new()),
         fail_with: Some(ClipboardError::WriteFailed("locked".to_owned())),
+        ..RecordingClipboard::default()
     };
     let clip_err = session
         .export_clipboard(state, &failing_clip)
