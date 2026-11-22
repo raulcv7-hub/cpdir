@@ -12,8 +12,8 @@ use cpdir::domain::{
     TextFileData, TextFileState,
 };
 use cpdir::output::{
-    GitCommitEntry, GitContextSnapshot, GitHotspotEntry, GitTagEntry, XmlWriteError,
-    render_strict_xml,
+    GitCommitEntry, GitContextSnapshot, GitDiffNumstatEntry, GitDiffStat, GitHotspotEntry,
+    GitTagEntry, XmlWriteError, render_strict_xml,
 };
 use cpdir::scanner::{ReadFileOutcome, read_bounded_utf8};
 
@@ -145,6 +145,19 @@ fn golden_git_context_escapes_hostile_xml_and_handles_empty_sections() {
     let git = GitContextSnapshot {
         branch: "feat/a&b<c>".to_owned(),
         working_tree_lines: vec!["M src/a&b.rs".to_owned()],
+        working_diff_numstat: vec![
+            GitDiffNumstatEntry {
+                stat: GitDiffStat::Text {
+                    added: 12,
+                    deleted: 4,
+                },
+                rel_path: "src/a&b<1>.rs".to_owned(),
+            },
+            GitDiffNumstatEntry {
+                stat: GitDiffStat::Binary,
+                rel_path: "assets/logo&icon.png".to_owned(),
+            },
+        ],
         recent_commits: vec![GitCommitEntry {
             short_hash: "a1b2c3d".to_owned(),
             subject: "fix: escape <tag> & ]]>".to_owned(),
@@ -165,6 +178,9 @@ fn golden_git_context_escapes_hostile_xml_and_handles_empty_sections() {
     assert!(parsed.has_git_context);
     assert_eq!(parsed.files, vec![]);
     assert!(xml.contains("<branch>feat/a&amp;b&lt;c&gt;</branch>"));
+    assert!(xml.contains("<working_diff_numstat count=\"2\">"));
+    assert!(xml.contains("      +12 -4 src/a&amp;b&lt;1&gt;.rs"));
+    assert!(xml.contains("      binary assets/logo&amp;icon.png"));
     assert!(xml.contains("a1b2c3d | fix: escape &lt;tag&gt; &amp; ]]&gt;"));
     assert!(xml.contains("        line1 &lt;x&gt;"));
     assert!(xml.contains("<recent_tags count=\"1\">"));
@@ -174,12 +190,14 @@ fn golden_git_context_escapes_hostile_xml_and_handles_empty_sections() {
     let clean_git = GitContextSnapshot {
         branch: "main".to_owned(),
         working_tree_lines: vec![],
+        working_diff_numstat: vec![],
         recent_commits: vec![],
         recent_tags: vec![],
         hotspots: vec![],
     };
     let clean_xml = render_strict_xml(&tree, &contents, Some(&clean_git)).expect("clean git");
     assert!(clean_xml.contains("<working_tree/>"));
+    assert!(!clean_xml.contains("<working_diff_numstat"));
     assert!(!clean_xml.contains("<recent_tags"));
     assert!(!clean_xml.contains("<hotspots>"));
     assert!(parse_strict_xml(&clean_xml).is_ok());

@@ -1,4 +1,4 @@
-//! Real Git repository history, UTF-8 path, unborn-repo, and malicious `.git/config` tests.
+//! Real Git repository history, diff numstat, UTF-8 path, unborn-repo, and `.git/config` tests.
 
 mod common;
 
@@ -9,19 +9,18 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use common::git_repo::GitRepoHarness;
-use common::workspace::WorkspaceBuilder;
+use common::workspace::{WorkspaceBuilder, sample_png_bytes};
 use common::xml_validator::parse_strict_xml;
 use cpdir::domain::DirectoryTree;
 use cpdir::git::{
     GitAvailability, GitContextConfig, extract_git_context, extract_git_context_status,
 };
-use cpdir::output::render_strict_xml;
+use cpdir::output::{GitDiffNumstatEntry, GitDiffStat, render_git_context_xml, render_strict_xml};
 use cpdir::scanner::{ScanConfig, scan_directory};
+use cpdir::tokens::TokenCounter;
 use cpdir::tui::TuiAppState;
 
-#[test]
-fn real_git_repo_extracts_commits_tags_hotspots_utf8_paths_and_toggles_xml() {
-    let ws = WorkspaceBuilder::new();
+fn setup_multi_commit_fixture(ws: &WorkspaceBuilder) {
     ws.write_text("src/main.rs", "fn main() {}\n");
     ws.write_text("src/café.rs", "pub fn cafe() {}\n");
 
@@ -51,6 +50,14 @@ fn real_git_repo_extracts_commits_tags_hotspots_utf8_paths_and_toggles_xml() {
 
     ws.write_text("src/main.rs", "fn main() { let v = 4; }\n");
     ws.write_text("notes.txt", "pending note\n");
+    ws.write_bytes("assets/logo.png", &sample_png_bytes());
+    git.run_git(&["add", "assets/logo.png"]);
+}
+
+#[test]
+fn real_git_repo_extracts_commits_tags_hotspots_and_numstat() {
+    let ws = WorkspaceBuilder::new();
+    setup_multi_commit_fixture(&ws);
 
     let ctx = extract_git_context(ws.root(), &GitContextConfig::default())
         .expect("git context must be detected");
@@ -61,12 +68,27 @@ fn real_git_repo_extracts_commits_tags_hotspots_utf8_paths_and_toggles_xml() {
             .any(|l| l.contains("M src/main.rs"))
     );
     assert!(ctx.working_tree_lines.iter().any(|l| l == "?? notes.txt"));
+    assert_eq!(
+        ctx.working_diff_numstat,
+        vec![
+            GitDiffNumstatEntry {
+                stat: GitDiffStat::Binary,
+                rel_path: "assets/logo.png".to_owned(),
+            },
+            GitDiffNumstatEntry {
+                stat: GitDiffStat::Text {
+                    added: 1,
+                    deleted: 1,
+                },
+                rel_path: "src/main.rs".to_owned(),
+            },
+        ]
+    );
 
     assert_eq!(ctx.recent_commits.len(), 4);
     let truncated_body = ctx.recent_commits[0].body.as_deref().expect("clipped body");
     assert!(truncated_body.ends_with("..."));
     assert_eq!(truncated_body.chars().count(), 303);
-
     assert_eq!(
         ctx.recent_commits[3].subject,
         "feat: add <core> & café module"
@@ -94,19 +116,36 @@ fn real_git_repo_extracts_commits_tags_hotspots_utf8_paths_and_toggles_xml() {
     assert_eq!(ctx.hotspots[0].rel_path, "src/main.rs");
     assert_eq!(ctx.hotspots[0].commits, 3);
     assert!(ctx.hotspots.iter().any(|h| h.rel_path == "src/café.rs"));
+}
 
+#[test]
+fn git_context_xml_renders_numstat_and_toggles_token_count() {
+    let ws = WorkspaceBuilder::new();
+    setup_multi_commit_fixture(&ws);
+
+    let ctx = extract_git_context(ws.root(), &GitContextConfig::default())
+        .expect("git context must be detected");
     let scan = scan_directory(ws.root(), &ScanConfig::default()).expect("scan");
     let mut ui = TuiAppState::new(scan.tree, true);
+    let git_tokens = TokenCounter::o200k()
+        .expect("o200k")
+        .count(&render_git_context_xml(&ctx));
+    ui.set_git_context_tokens(git_tokens);
     assert!(ui.include_git_context());
+    assert!(ui.total_effective_tokens() > 0);
 
     let xml_on = render_strict_xml(ui.tree(), &scan.contents, Some(&ctx)).expect("xml on");
     let parsed_on = parse_strict_xml(&xml_on).expect("valid xml with git");
     assert!(parsed_on.has_git_context);
+    assert!(xml_on.contains("<working_diff_numstat count=\"2\">"));
+    assert!(xml_on.contains("      binary assets/logo.png"));
+    assert!(xml_on.contains("      +1 -1 src/main.rs"));
     assert!(xml_on.contains("<recent_tags count=\"2\">"));
     assert!(xml_on.contains("src/café.rs (1 commits)"));
 
     ui.toggle_git_context();
     assert!(!ui.include_git_context());
+    assert_eq!(ui.total_effective_tokens(), 0);
     let xml_off = render_strict_xml(ui.tree(), &scan.contents, None).expect("xml off");
     let parsed_off = parse_strict_xml(&xml_off).expect("valid xml without git");
     assert!(!parsed_off.has_git_context);
@@ -123,12 +162,24 @@ fn handles_non_git_directories_and_unborn_repositories_gracefully() {
 
     let unborn = WorkspaceBuilder::new();
     unborn.write_text("draft.txt", "uncommitted\n");
-    let _git = GitRepoHarness::init(unborn.root());
+    unborn.write_text("staged.rs", "line 1\nline 2\n");
+    let git = GitRepoHarness::init(unborn.root());
+    git.run_git(&["add", "staged.rs"]);
 
     let ctx = extract_git_context(unborn.root(), &GitContextConfig::default())
         .expect("unborn repo still returns context");
     assert!(ctx.branch.contains("main"));
-    assert_eq!(ctx.working_tree_lines, vec!["?? draft.txt"]);
+    assert!(ctx.working_tree_lines.iter().any(|l| l == "?? draft.txt"));
+    assert_eq!(
+        ctx.working_diff_numstat,
+        vec![GitDiffNumstatEntry {
+            stat: GitDiffStat::Text {
+                added: 2,
+                deleted: 0,
+            },
+            rel_path: "staged.rs".to_owned(),
+        }]
+    );
     assert_eq!(ctx.recent_commits, vec![]);
     assert_eq!(ctx.recent_tags, vec![]);
     assert_eq!(ctx.hotspots, vec![]);
@@ -140,7 +191,7 @@ fn handles_non_git_directories_and_unborn_repositories_gracefully() {
 }
 
 #[test]
-fn monorepo_subdirectory_scopes_status_commits_hotspots_and_detached_head() {
+fn monorepo_subdirectory_scopes_status_numstat_commits_hotspots_and_detached_head() {
     let ws = WorkspaceBuilder::new();
     ws.write_text("packages/web/app.ts", "export const web = 1;\n");
     ws.write_text("packages/api/main.rs", "fn main() {}\n");
@@ -163,7 +214,12 @@ fn monorepo_subdirectory_scopes_status_commits_hotspots_and_detached_head() {
     let api_dir = ws.root().join("packages/api");
     fs::rename(api_dir.join("old_name.rs"), api_dir.join("new_name.rs")).expect("rename");
     git.run_git(&["add", "-A"]);
+    ws.write_text("packages/web/app.ts", "export const web = 99;\n");
     ws.write_text("packages/web/dirty_web.ts", "export const dirty = true;\n");
+    ws.write_text(
+        "packages/api/main.rs",
+        "fn main() {\n    println!(\"v3\");\n}\n",
+    );
     ws.write_text("packages/api/dirty_api.txt", "pending api note\n");
 
     let GitAvailability::Available(ctx) =
@@ -188,6 +244,24 @@ fn monorepo_subdirectory_scopes_status_commits_hotspots_and_detached_head() {
         ctx.working_tree_lines
             .iter()
             .all(|l| !l.contains("packages/web") && !l.contains("packages/api/"))
+    );
+
+    assert!(
+        ctx.working_diff_numstat
+            .iter()
+            .any(|e| e.rel_path == "main.rs"
+                && e.stat
+                    == GitDiffStat::Text {
+                        added: 3,
+                        deleted: 1
+                    }),
+        "expected relative main.rs numstat, got {:?}",
+        ctx.working_diff_numstat
+    );
+    assert!(
+        ctx.working_diff_numstat
+            .iter()
+            .all(|e| !e.rel_path.contains("web") && !e.rel_path.contains("packages/api/"))
     );
 
     let subjects: Vec<&str> = ctx
@@ -266,7 +340,7 @@ fn neutralizes_malicious_git_config_hooks_verified_by_positive_control() {
 }
 
 #[test]
-fn enforces_configured_caps_for_commits_tags_hotspots_and_working_tree() {
+fn enforces_configured_caps_for_commits_tags_hotspots_numstat_and_working_tree() {
     let ws = WorkspaceBuilder::new();
     let git = GitRepoHarness::init(ws.root());
 
@@ -283,6 +357,9 @@ fn enforces_configured_caps_for_commits_tags_hotspots_and_working_tree() {
             ]);
         }
     }
+    for idx in 0..4 {
+        ws.write_text(&format!("file_{idx}.rs"), &format!("// modified {idx}\n"));
+    }
     for dirty in 0..5 {
         ws.write_text(&format!("dirty_{dirty}.txt"), "dirty\n");
     }
@@ -292,6 +369,7 @@ fn enforces_configured_caps_for_commits_tags_hotspots_and_working_tree() {
         max_tags: 1,
         max_hotspots: 2,
         max_working_tree_lines: 2,
+        max_diff_numstat_lines: 2,
         ..GitContextConfig::default()
     };
     let ctx = extract_git_context(ws.root(), &cfg).expect("capped context");
@@ -299,8 +377,9 @@ fn enforces_configured_caps_for_commits_tags_hotspots_and_working_tree() {
     assert_eq!(ctx.recent_commits.len(), 2);
     assert_eq!(ctx.recent_tags.len(), 1);
     assert_eq!(ctx.hotspots.len(), 2);
+    assert_eq!(ctx.working_diff_numstat.len(), 2);
     assert_eq!(ctx.working_tree_lines.len(), 3);
-    assert_eq!(ctx.working_tree_lines[2], "... (+3 more)");
+    assert_eq!(ctx.working_tree_lines[2], "... (+7 more)");
 }
 
 fn inject_dummy_gpg_signature(repo_root: &std::path::Path, git: &GitRepoHarness<'_>) {

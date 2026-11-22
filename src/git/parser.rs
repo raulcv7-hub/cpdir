@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::output::{GitCommitEntry, GitHotspotEntry, GitTagEntry};
+use crate::output::{
+    GitCommitEntry, GitDiffNumstatEntry, GitDiffStat, GitHotspotEntry, GitTagEntry,
+};
 
 /// Parses `git status --porcelain=v1 -b` output into `(branch, working_tree_lines)`.
 #[must_use]
@@ -33,6 +35,45 @@ pub(crate) fn parse_branch_and_status(
     }
 
     (branch, working_tree_lines)
+}
+
+/// Parses `git diff --numstat` output capped at `max_lines` entries.
+#[must_use]
+pub(crate) fn parse_diff_numstat(raw: &str, max_lines: usize) -> Vec<GitDiffNumstatEntry> {
+    if max_lines == 0 {
+        return Vec::new();
+    }
+    let mut entries = Vec::new();
+    for line in raw.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(3, '\t');
+        let (Some(add_str), Some(del_str), Some(path_str)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let add_trim = add_str.trim();
+        let del_trim = del_str.trim();
+        let stat = if add_trim == "-" && del_trim == "-" {
+            GitDiffStat::Binary
+        } else if let (Ok(added), Ok(deleted)) =
+            (add_trim.parse::<usize>(), del_trim.parse::<usize>())
+        {
+            GitDiffStat::Text { added, deleted }
+        } else {
+            continue;
+        };
+        entries.push(GitDiffNumstatEntry {
+            stat,
+            rel_path: path_str.to_owned(),
+        });
+        if entries.len() >= max_lines {
+            break;
+        }
+    }
+    entries
 }
 
 /// Parses NUL-delimited `git log` records into truncated [`GitCommitEntry`] items.

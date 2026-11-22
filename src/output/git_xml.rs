@@ -33,6 +33,29 @@ pub struct GitHotspotEntry {
     pub commits: usize,
 }
 
+/// Line-change summary reported by `git diff --numstat`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitDiffStat {
+    /// Textual file line additions and deletions.
+    Text {
+        /// Number of added lines (`+N`).
+        added: usize,
+        /// Number of deleted lines (`-M`).
+        deleted: usize,
+    },
+    /// Binary file modification reported as `-\t-` by Git.
+    Binary,
+}
+
+/// Single modified-file numstat entry rendered inside `<working_diff_numstat>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitDiffNumstatEntry {
+    /// Text line delta or binary change indicator.
+    pub stat: GitDiffStat,
+    /// Path relative to the inspected root or monorepo subdirectory.
+    pub rel_path: String,
+}
+
 /// Optional Git repository context snapshot rendered when enabled (`[g]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitContextSnapshot {
@@ -40,6 +63,8 @@ pub struct GitContextSnapshot {
     pub branch: String,
     /// Short `git status` lines for the current working tree.
     pub working_tree_lines: Vec<String>,
+    /// Bounded `git diff --numstat` entries for tracked working-tree/staged changes.
+    pub working_diff_numstat: Vec<GitDiffNumstatEntry>,
     /// Recent commits ordered newest-first.
     pub recent_commits: Vec<GitCommitEntry>,
     /// Recent repository tags ordered newest-first.
@@ -63,6 +88,7 @@ pub(crate) fn render_git_context(git: &GitContextSnapshot, out: &mut String) {
     out.push_str("</branch>\n");
 
     render_working_tree(&git.working_tree_lines, out);
+    render_working_diff_numstat(&git.working_diff_numstat, out);
     render_recent_commits(&git.recent_commits, out);
     render_recent_tags(&git.recent_tags, out);
     render_hotspots(&git.hotspots, out);
@@ -81,6 +107,30 @@ fn render_working_tree(lines: &[String], out: &mut String) {
         out.push('\n');
     }
     out.push_str("    </working_tree>\n");
+}
+
+fn render_working_diff_numstat(entries: &[GitDiffNumstatEntry], out: &mut String) {
+    if entries.is_empty() {
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "    <working_diff_numstat count=\"{}\">",
+        entries.len()
+    );
+    for entry in entries {
+        match entry.stat {
+            GitDiffStat::Text { added, deleted } => {
+                let _ = write!(out, "      +{added} -{deleted} ");
+            }
+            GitDiffStat::Binary => {
+                out.push_str("      binary ");
+            }
+        }
+        push_escaped_xml_text(out, &entry.rel_path);
+        out.push('\n');
+    }
+    out.push_str("    </working_diff_numstat>\n");
 }
 
 fn render_recent_commits(commits: &[GitCommitEntry], out: &mut String) {
