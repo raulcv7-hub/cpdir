@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::application::analyze::{
-    analyze_tree_contents, build_initial_tui_state, scan_and_analyze,
+    analyze_tree_contents, build_initial_tui_state, compute_xml_file_tokens,
+    compute_xml_overhead_tokens, scan_and_analyze,
 };
 use crate::application::error::{AppError, RunOutcome};
 use crate::config::limits::INLINE_CONTENT_CACHE_BYTES;
@@ -18,6 +19,7 @@ use crate::scanner::{
 use crate::state::{
     MemoryStore, SavedWorkspaceState, normalize_dir_for_hash, resolve_display_abs_path,
 };
+use crate::tokens::TokenCounter;
 use crate::tui::{AppExitAction, TuiAppState};
 
 /// Imperative session owning loaded file buffers, Git metadata, and persistence adapters.
@@ -26,6 +28,7 @@ pub struct WorkspaceSession {
     target_dir: PathBuf,
     display_abs_path: String,
     contents: HashMap<NodeId, String>,
+    xml_file_tokens: HashMap<NodeId, usize>,
     git_snapshot: Option<GitContextSnapshot>,
     scan_config: ScanConfig,
     store: MemoryStore,
@@ -58,6 +61,7 @@ impl WorkspaceSession {
             (scan_res, git_snapshot)
         });
         let mut scan = scan_res?;
+        let xml_file_tokens = compute_xml_file_tokens(&scan.tree, &scan.contents)?;
 
         let saved = store.load_lenient(target_dir);
         if let Some(prev) = &saved {
@@ -69,16 +73,30 @@ impl WorkspaceSession {
             INLINE_CONTENT_CACHE_BYTES,
         );
 
-        let state = build_initial_tui_state(scan.tree, git_snapshot.as_ref(), saved.as_ref());
+        let mut state = build_initial_tui_state(scan.tree, git_snapshot.as_ref(), saved.as_ref());
         let session = Self {
             target_dir: target_dir.to_path_buf(),
             display_abs_path: resolve_display_abs_path(target_dir),
             contents: scan.contents,
+            xml_file_tokens,
             git_snapshot,
             scan_config,
             store,
         };
+        session.refresh_xml_overhead(&mut state);
         Ok((session, state))
+    }
+
+    /// Recomputes XML summary, directory structure, and file-tag token overhead for `state`.
+    pub fn refresh_xml_overhead(&self, state: &mut TuiAppState) {
+        let abs_root_path = state
+            .include_abs_path()
+            .then_some(self.display_abs_path.as_str());
+        if let Ok(tokens) =
+            compute_xml_overhead_tokens(state.tree(), abs_root_path, &self.xml_file_tokens)
+        {
+            state.set_xml_overhead_tokens(tokens);
+        }
     }
 
     /// Returns the normalized absolute path used when opt-in `root_path` emission is enabled.
@@ -119,11 +137,15 @@ impl WorkspaceSession {
             state.set_inspector_status(format!("Failed to analyze {rel_path}/: {err}"));
             return true;
         }
+        let sub_xml_tokens = compute_xml_file_tokens(&sub.tree, &sub.contents).unwrap_or_default();
 
         if let Some(outcome) = state.apply_reingested_dir(&rel_path, sub.tree, sub.truncated) {
             for (old_id, new_id) in outcome.id_map {
                 if let Some(text) = sub.contents.remove(&old_id) {
                     self.contents.insert(new_id, text);
+                }
+                if let Some(xml_tok) = sub_xml_tokens.get(&old_id).copied() {
+                    self.xml_file_tokens.insert(new_id, xml_tok);
                 }
             }
             let _ = release_large_unselected_contents(
@@ -131,6 +153,7 @@ impl WorkspaceSession {
                 &mut self.contents,
                 INLINE_CONTENT_CACHE_BYTES,
             );
+            self.refresh_xml_overhead(state);
         }
         true
     }
@@ -160,7 +183,7 @@ impl WorkspaceSession {
         let abs_root_path = state
             .include_abs_path()
             .then_some(self.display_abs_path.as_str());
-        let total_tokens = state.total_effective_tokens();
+        let fallback_tokens = state.total_effective_tokens();
 
         let tree = state.into_tree();
         hydrate_selected_contents(
@@ -183,6 +206,7 @@ impl WorkspaceSession {
         .map_err(AppError::Xml)?;
         clipboard.copy_text(&xml).map_err(AppError::Clipboard)?;
 
+        let exact_tokens = TokenCounter::o200k().map_or(fallback_tokens, |c| c.count(&xml));
         let to_save = SavedWorkspaceState::new(
             normalize_dir_for_hash(&self.target_dir),
             tree.collect_overrides(),
@@ -193,7 +217,7 @@ impl WorkspaceSession {
 
         Ok(RunOutcome::Copied {
             files: counts.read_files,
-            tokens: total_tokens,
+            tokens: exact_tokens,
             xml_bytes: xml.len(),
         })
     }

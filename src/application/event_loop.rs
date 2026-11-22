@@ -20,6 +20,7 @@ pub(super) fn run_tui_event_loop(
     let mut guard = TerminalGuard::enter()?;
     let mut layout = TuiViewportAreas::default();
     let mut needs_draw = true;
+    let mut last_fp = state.overhead_fingerprint();
 
     while state.exit_action().is_none() {
         if needs_draw {
@@ -51,7 +52,16 @@ pub(super) fn run_tui_event_loop(
             && reingest_needed
             && session.reingest_pending(state, DEFAULT_RESCAN_MAX_ENTRIES)
         {
+            last_fp = state.overhead_fingerprint();
             needs_draw = true;
+        }
+
+        if state.exit_action().is_none() {
+            let next_fp = state.overhead_fingerprint();
+            if next_fp != last_fp {
+                session.refresh_xml_overhead(state);
+                last_fp = next_fp;
+            }
         }
     }
     Ok(())

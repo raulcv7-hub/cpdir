@@ -45,7 +45,10 @@ pub fn run_interactive(
         ScanConfig::default(),
         GitContextConfig::default(),
     )?;
-    state.set_include_abs_path(include_abs_path);
+    if include_abs_path {
+        state.set_include_abs_path(true);
+        session.refresh_xml_overhead(&mut state);
+    }
     event_loop::run_tui_event_loop(&mut session, &mut state)?;
     session.export_clipboard(state, clipboard)
 }

@@ -9,6 +9,7 @@ use cpdir::git::GitContextConfig;
 use cpdir::output::ClipboardError;
 use cpdir::scanner::{ContentHydrationError, ScanConfig, ScanError};
 use cpdir::state::MemoryStore;
+use cpdir::tokens::TokenCounter;
 
 use crate::common::git_repo::GitRepoHarness;
 use crate::common::scan_helpers::RecordingClipboard;
@@ -38,6 +39,7 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
 
     assert!(state.has_git_context());
     assert!(state.git_context_tokens() > 0);
+    assert!(state.xml_overhead_tokens() > 0);
     assert!(!state.include_abs_path());
     assert_eq!(state.metrics().counts.read_files, 2);
 
@@ -92,6 +94,7 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
     assert_eq!(state2.metrics().counts.read_files, 3);
 
     state2.set_include_abs_path(true);
+    session2.refresh_xml_overhead(&mut state2);
     state2.request_copy();
     let clip2 = RecordingClipboard::default();
     session2
@@ -114,6 +117,46 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
     )
     .expect("reopen workspace 3");
     assert!(!state3.include_abs_path());
+}
+
+#[test]
+fn workspace_session_empty_selection_overhead_matches_clipboard_xml_exactly() {
+    let ws = WorkspaceBuilder::new();
+    let state_ws = WorkspaceBuilder::new();
+    ws.write_text("src/main.rs", "fn main() {}\n");
+    ws.create_dir("empty_dir");
+
+    let store = MemoryStore::in_dir(state_ws.root());
+    let (mut session, mut state) = WorkspaceSession::open(
+        ws.root(),
+        store,
+        ScanConfig::default(),
+        GitContextConfig::default(),
+    )
+    .expect("open workspace");
+
+    state.unselect_all();
+    session.refresh_xml_overhead(&mut state);
+    let live_empty = state.total_effective_tokens();
+
+    state.request_copy();
+    state.confirm_copy_anyway();
+    let clip = RecordingClipboard::default();
+    let outcome = session
+        .export_clipboard(state, &clip)
+        .expect("export empty");
+    let xml = &clip.copied.borrow()[0];
+    let exact = TokenCounter::o200k().expect("o200k").count(xml);
+
+    assert_eq!(live_empty, exact);
+    assert_eq!(
+        outcome,
+        RunOutcome::Copied {
+            files: 0,
+            tokens: exact,
+            xml_bytes: xml.len(),
+        }
+    );
 }
 
 #[test]

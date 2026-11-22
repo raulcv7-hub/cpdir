@@ -114,11 +114,34 @@ impl TuiAppState {
         self.context.git_context_tokens()
     }
 
-    /// Returns total selected file tokens plus active `<git_context>` tokens.
+    /// Stores XML summary, directory structure, envelope, and file-tag token overhead.
+    pub const fn set_xml_overhead_tokens(&mut self, tokens: usize) {
+        self.context.set_xml_overhead_tokens(tokens);
+    }
+
+    /// Returns the non-Git XML metadata and wrapper token overhead included in the live total.
+    #[must_use]
+    pub const fn xml_overhead_tokens(&self) -> usize {
+        self.context.xml_overhead_tokens()
+    }
+
+    /// Returns total selected file tokens plus active XML and `<git_context>` tokens.
     #[must_use]
     pub const fn total_effective_tokens(&self) -> usize {
         self.context
             .total_effective_tokens(self.metrics.counts.selected_tokens)
+    }
+
+    /// Returns a compact fingerprint detecting when XML overhead needs recalculation.
+    #[must_use]
+    pub fn overhead_fingerprint(&self) -> (usize, usize, usize, usize, bool) {
+        (
+            self.metrics.counts.read_files,
+            self.metrics.counts.unread_files,
+            self.metrics.counts.selected_tokens,
+            self.tree.pruned_dirs().len(),
+            self.include_abs_path(),
+        )
     }
 
     /// Overrides the initial Git toggle state (e.g., from persisted directory settings).

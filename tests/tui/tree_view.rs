@@ -2,10 +2,16 @@
 
 use std::collections::HashMap;
 
+use cpdir::application::{RunOutcome, WorkspaceSession};
 use cpdir::domain::{
     DirectoryTree, NaturalExclusion, NaturalSelection, TextFileData, TextFileState,
+    format_token_count,
 };
+use cpdir::git::GitContextConfig;
 use cpdir::output::{XmlRenderOptions, render_strict_xml, render_strict_xml_with_options};
+use cpdir::scanner::ScanConfig;
+use cpdir::state::MemoryStore;
+use cpdir::tokens::TokenCounter;
 use cpdir::tui::AppExitAction;
 use cpdir::tui::TuiAppState;
 use ratatui::Terminal;
@@ -13,7 +19,7 @@ use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::style::Color;
 
-use crate::common::scan_helpers::scan_and_analyze;
+use crate::common::scan_helpers::{RecordingClipboard, scan_and_analyze};
 use crate::common::tui_harness::{
     draw_and_dump, find_substring_fg, move_cursor_to, press_key, release_key,
 };
@@ -145,6 +151,82 @@ fn tui_abs_path_toggle_updates_chrome_and_emits_escaped_root_path() {
     press_key(&mut state, KeyCode::Char('p'));
     assert!(!state.include_abs_path());
     assert!(draw_and_dump(&mut terminal, &mut state).contains("Path: OFF"));
+}
+
+#[test]
+fn tui_header_live_tokens_track_summary_structure_abs_path_and_clipboard_payload() {
+    let ws = WorkspaceBuilder::new();
+    let state_ws = WorkspaceBuilder::new();
+    ws.write_text(".gitignore", "logs/\n");
+    ws.write_text("src/main.rs", "fn main() {\r\n    let ok = 1 < 2;\r\n}\r\n");
+    ws.write_text("logs/ignored.log", "ignored log entry\n");
+    ws.write_bytes("assets/logo.png", &sample_png_bytes());
+    ws.create_dir("empty_dir");
+    ws.populate_files("node_modules/pkg", 5, "dep");
+
+    let store = MemoryStore::in_dir(state_ws.root());
+    let (mut session, mut state) = WorkspaceSession::open(
+        ws.root(),
+        store,
+        ScanConfig::default(),
+        GitContextConfig::default(),
+    )
+    .expect("open workspace");
+
+    let counter = TokenCounter::o200k().expect("o200k");
+    let mut terminal = Terminal::new(TestBackend::new(115, 24)).expect("test terminal");
+    let initial_tokens = state.total_effective_tokens();
+    assert!(initial_tokens > state.metrics().counts.selected_tokens);
+    assert!(
+        draw_and_dump(&mut terminal, &mut state)
+            .contains(&format!("Tokens: {}", format_token_count(initial_tokens)))
+    );
+
+    // Unselect all files: header must match the exact XML summary+structure+envelope token count.
+    press_key(&mut state, KeyCode::Char('a'));
+    session.refresh_xml_overhead(&mut state);
+    assert_eq!(state.metrics().counts.read_files, 0);
+    let empty_live = state.total_effective_tokens();
+    let empty_xml = render_strict_xml(state.tree(), session.contents(), None).expect("empty xml");
+    assert_eq!(empty_live, counter.count(&empty_xml));
+
+    // Toggle `[p]` ON and verify exact live token match for empty selection with `root_path`.
+    press_key(&mut state, KeyCode::Char('p'));
+    session.refresh_xml_overhead(&mut state);
+    let empty_abs_live = state.total_effective_tokens();
+    assert!(empty_abs_live > empty_live);
+    let empty_abs_xml = render_strict_xml_with_options(
+        state.tree(),
+        session.contents(),
+        XmlRenderOptions {
+            git_context: None,
+            abs_root_path: Some(session.display_abs_path()),
+        },
+    )
+    .expect("empty abs xml");
+    assert_eq!(empty_abs_live, counter.count(&empty_abs_xml));
+
+    // Restore files and copy to clipboard.
+    press_key(&mut state, KeyCode::Char('a'));
+    session.refresh_xml_overhead(&mut state);
+    let read_files = state.metrics().counts.read_files;
+    let raw_selected = state.metrics().counts.selected_tokens;
+    let pre_copy_live = state.total_effective_tokens();
+    assert!(pre_copy_live > raw_selected);
+    let header_screen = draw_and_dump(&mut terminal, &mut state);
+    assert!(header_screen.contains(&format!("Tokens: {}", format_token_count(pre_copy_live))));
+
+    state.request_copy();
+    let clip = RecordingClipboard::default();
+    let outcome = session.export_clipboard(state, &clip).expect("export");
+    let copied_xml = &clip.copied.borrow()[0];
+    let actual_xml_tokens = counter.count(copied_xml);
+
+    assert!(matches!(
+        outcome,
+        RunOutcome::Copied { tokens, .. } if tokens == actual_xml_tokens
+    ));
+    assert!(pre_copy_live.abs_diff(actual_xml_tokens) <= read_files + 2);
 }
 
 #[test]

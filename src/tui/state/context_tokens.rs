@@ -5,6 +5,7 @@ pub(super) struct ContextTokenState {
     has_git_context: bool,
     include_git_context: bool,
     git_context_tokens: usize,
+    xml_overhead_tokens: usize,
     include_abs_path: bool,
 }
 
@@ -14,6 +15,7 @@ impl ContextTokenState {
             has_git_context,
             include_git_context: has_git_context,
             git_context_tokens: 0,
+            xml_overhead_tokens: 0,
             include_abs_path: false,
         }
     }
@@ -34,11 +36,20 @@ impl ContextTokenState {
         self.git_context_tokens
     }
 
+    pub(super) const fn set_xml_overhead_tokens(&mut self, tokens: usize) {
+        self.xml_overhead_tokens = tokens;
+    }
+
+    pub(super) const fn xml_overhead_tokens(self) -> usize {
+        self.xml_overhead_tokens
+    }
+
     pub(super) const fn total_effective_tokens(self, selected_file_tokens: usize) -> usize {
+        let base = selected_file_tokens.saturating_add(self.xml_overhead_tokens);
         if self.include_git_context() {
-            selected_file_tokens.saturating_add(self.git_context_tokens)
+            base.saturating_add(self.git_context_tokens)
         } else {
-            selected_file_tokens
+            base
         }
     }
 

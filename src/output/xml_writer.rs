@@ -84,6 +84,28 @@ pub fn render_strict_xml_with_options<S: BuildHasher>(
     Ok(xml)
 }
 
+/// Renders `<cpdir_context>`, `<context_summary>`, `<directory_structure>`, and `<files>` envelope
+/// without file payloads for live token overhead accounting.
+#[must_use]
+pub fn render_xml_structure_envelope(tree: &DirectoryTree, abs_root_path: Option<&str>) -> String {
+    let mut out = String::with_capacity(1_024);
+    out.push_str("<cpdir_context>\n");
+    render_xml_header_sections(tree, abs_root_path, &mut out);
+    out.push_str("  <files>\n");
+    out.push_str("  </files>\n");
+    out.push_str("</cpdir_context>\n");
+    out
+}
+
+/// Appends a single escaped `<file path="...">...</file>` entry into `out`.
+pub fn render_selected_file_xml(rel_path: &str, content: &str, out: &mut String) {
+    out.push_str("    <file path=\"");
+    push_escaped_xml_attr(out, rel_path);
+    out.push_str("\">");
+    push_escaped_xml_text(out, content);
+    out.push_str("</file>\n");
+}
+
 fn estimate_output_bytes(tree: &DirectoryTree) -> usize {
     let payload_sum: usize = tree
         .nodes()
@@ -118,11 +140,7 @@ fn render_selected_files<S: BuildHasher>(
                         rel_path: node.rel_path.clone(),
                     });
                 };
-                out.push_str("    <file path=\"");
-                push_escaped_xml_attr(out, &node.rel_path);
-                out.push_str("\">");
-                push_escaped_xml_text(out, content);
-                out.push_str("</file>\n");
+                render_selected_file_xml(&node.rel_path, content, out);
             }
             NodeKind::TextFile(_) | NodeKind::DiscardedFile(_) => {}
         }
