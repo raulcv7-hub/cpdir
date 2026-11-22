@@ -2,29 +2,31 @@
 
 ## Product Invariants
 
-- Target Windows 11 CLI + interactive TUI (`cpdir`).
-- Emit strictly escaped XML 1.0 exclusively to the system clipboard; never emit XML to `stdout` or split output into files.
-- Preserve literal file fidelity: never strip comments, strip blank lines, or apply AST compression.
-- Always emit the full `<directory_structure>` (including empty directories, binaries, and unselected files), pruning only hardcoded dependency/VCS folders.
+- Target Windows 11 CLI + interactive TUI (`cpdir`) writing strict XML 1.0 exclusively to the OS clipboard; keep `stdout` completely empty (`print_stdout = "deny"`).
+- Preserve source fidelity without AST compression, comment stripping, or blank-line trimming; wrap non-empty `<file>` bodies in `<![CDATA[...]]>` (splitting literal `]]>`) and normalize `CRLF`/`CR` to `LF` in XML text to eliminate entity double-escaping and `&#xD;` token noise for LLMs.
+- Emit `<context_summary ... />` followed by pre-order DFS stacked full paths in `<directory_structure>`, including empty directories (`dir/`), discarded files, and unselected files with omission badges.
+- Keep `root_path` (`--abs-path` / `[p]`) ephemeral and off by default; never persist it to `%LOCALAPPDATA%`.
+- Keep Windows Explorer `HKCU` context-menu registration (`cpdir install` / `uninstall` / `--export-reg`) strictly opt-in; never mutate Registry during binary installation or non-interactive runs without `--yes`.
 
 ## Architecture & Module Discipline
 
-- Separate pure logic (Functional Core: `domain/`, `scanner/ignore_rules.rs`, `tokens/`, `security/`, `output/xml_writer.rs`) from I/O adapters (`scanner/walker.rs`, `scanner/file_reader.rs`, `git/`, `state/`, `platform/`, `tui/`).
-- Keep `src/` modules between 40 and 150 LOC (hard limit: 250 LOC); split cohesive responsibilities before exceeding the ceiling.
-- Make illegal states unrepresentable with algebraic enums; forbid `unsafe_code` and `println!` (`print_stdout = "deny"`).
-- Document every public item and new/modified function with Rustdoc contracts (`///`); keep inline comments strictly to `WHY > WHAT`.
+- Maintain Functional Core / Imperative Shell boundaries:
+  - Pure Core: `domain/`, `config/`, `scanner/ignore_rules.rs`, `tokens/counter.rs`, `security/{placeholders.rs,rules.rs,scanner.rs}`, `output/{summary_xml.rs,xml_escape.rs,xml_writer.rs,git_xml.rs}`, `platform/reg_export.rs`, `tui/state/`.
+  - I/O & UI Adapters: `application/` (`WorkspaceSession`, `event_loop.rs`, `terminal.rs`), `scanner/{walker.rs,rescan.rs,traversal.rs,file_reader.rs,content_store.rs}`, `git/`, `state/`, `output/clipboard.rs`, `platform/{win_registry.rs,install_cli.rs}`, `tui/{input/,view/}`.
+- Enforce strict CQS in `tui/`: `tui/view/` reads `&TuiAppState` immutably and records hit-boxes in `&mut TuiViewportAreas`; call `TuiViewportAreas::sync_scroll` prior to rendering.
+- Keep `src/` modules between 40 and 150 LOC (hard limit: 250 LOC); forbid `unsafe_code` and `println!`; document every public item with Rustdoc (`///`).
 
 ## Non-Obvious Constraints
 
-- Never use `ignore::WalkBuilder` blindly: directory pruning hides `.gitignore` matches from the TUI and blocks nested `.ignore` `!` re-inclusions. Walk non-dependency directories with nested matcher stacks (`.ignore` > `.gitignore`).
-- Persist only explicit user delta overrides in `%LOCALAPPDATA%\cpdir\state\` so unseen new files default to selected.
-- Render `[!]` secret indicators regardless of file selection, but count active alerts and require confirmation only when secret-flagged files are `Selected`. Exempt `.env.example` and template fixtures.
-- Harden all `git` subprocess calls with `-c core.fsmonitor= -c core.quotePath=false`; omit `<git_context>` and `[g]` silently outside Git repositories.
-- Normalize Explorer `%V` trailing-backslash drive-root quoting quirks (`"C:\"`) at CLI argument ingestion.
-- Keep `panic = "unwind"` in `Cargo.toml` so TUI RAII `Drop` guards always restore terminal raw mode.
+- Never replace `scanner/traversal.rs` with `ignore::WalkBuilder`: nested `.ignore` `!` whitelists must rescue `.gitignore` matches while keeping excluded nodes visible in the TUI.
+- Keep `NaturalExclusion::Pruned` on re-ingested pruned subtrees so `[a]` All/None never activates dependency files.
+- Persist only minimal delta overrides in `%LOCALAPPDATA%\cpdir\state\` so unseen new files default to selected.
+- Render `[!]` regardless of selection, exempting `.env.example`/templates/lockfiles; trigger `ConfirmSecrets` only when secret-flagged files are selected.
+- Harden `git` subprocess calls (`-c core.fsmonitor= -c core.hooksPath= -c core.quotePath=false -c diff.external= -c gpg.program=`, `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`) and omit `<git_context>` silently outside repositories.
+- Normalize Explorer `"C:\"` trailing-quote quirks at CLI ingestion; parse `install`/`uninstall` only on the unflagged first positional argument (`-- install` and `./install` still scan folders).
+- Keep explicit `panic = "unwind"` in `Cargo.toml` profiles so RAII guards (`TerminalGuard`) always restore terminal raw mode.
 
 ## Verification & Workflow
 
-- Single source of truth: run `task check` (`fmt` -> `lint` -> `test`) before any commit.
-- Favor real filesystem fixture ingestion, XML round-trip parsing, `proptest`, real `git` repos, and `ratatui::backend::TestBackend` workflows over trivial unit assertions.
-- Follow Conventional Commits (lowercase English imperative) and atomic, bisectable commits.
+- Single source of truth: run `task check` (`fmt` -> `lint` -> `test`) before any commit across `tests/{domain,scanner,security,git_output,platform,tui,e2e}/`.
+- Follow Conventional Commits (lowercase imperative English) with atomic, bisectable commits.
