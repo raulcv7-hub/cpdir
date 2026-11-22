@@ -16,7 +16,7 @@ use crate::tui::render_dialogs::{
 use crate::tui::render_inspector_row::build_inspector_entry_line;
 
 /// Renders the active modal overlay on top of the main tree view when `mode` is not [`UiMode::Tree`].
-pub fn render_active_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
+pub fn render_active_modal(frame: &mut Frame<'_>, area: Rect, state: &mut TuiAppState) {
     match state.mode() {
         UiMode::Tree => {}
         UiMode::Inspector { tab, .. } => render_inspector_modal(frame, area, state, tab),
@@ -33,12 +33,9 @@ pub fn render_active_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAppStat
 fn render_inspector_modal(
     frame: &mut Frame<'_>,
     area: Rect,
-    state: &TuiAppState,
+    state: &mut TuiAppState,
     tab: InspectorTab,
 ) {
-    let Some(ins) = state.active_inspector() else {
-        return;
-    };
     let popup = centered_percent_rect(86, 80, area);
     frame.render_widget(Clear, popup);
 
@@ -53,13 +50,21 @@ fn render_inspector_modal(
         return;
     }
 
-    let status_h = u16::from(ins.status_note().is_some());
+    let status_h = u16::from(
+        state
+            .active_inspector()
+            .and_then(|i| i.status_note())
+            .is_some(),
+    );
     let sections = Layout::vertical([
         Constraint::Length(2),
         Constraint::Min(1),
         Constraint::Length(status_h),
     ])
     .split(inner);
+
+    state.viewport_areas.inspector_tabs = sections[0];
+    state.viewport_areas.inspector_body = sections[1];
 
     let counts = state.metrics().counts;
     render_tab_header(
@@ -71,6 +76,9 @@ fn render_inspector_modal(
         counts.total_secret_files,
     );
 
+    let Some(ins) = state.active_inspector() else {
+        return;
+    };
     let entries = ins.entries();
     let total = entries.len();
     let viewport_h = usize::from(sections[1].height);
@@ -96,7 +104,9 @@ fn render_inspector_modal(
 
     frame.render_widget(Paragraph::new(lines), sections[1]);
 
-    if let Some(note) = ins.status_note() {
+    if let Some(ins) = state.active_inspector()
+        && let Some(note) = ins.status_note()
+    {
         let status_line = Line::styled(
             format!(" {note}"),
             Style::new()

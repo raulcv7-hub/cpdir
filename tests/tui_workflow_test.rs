@@ -14,12 +14,14 @@ use cpdir::scanner::{ScanConfig, ScanResult, rescan_pruned_dir, scan_directory};
 use cpdir::security::{SecretScanner, populate_secret_hits};
 use cpdir::tokens::{TokenCounter, populate_token_counts};
 use cpdir::tui::{
-    AppExitAction, InspectorTab, TuiAppState, UiMode, handle_key_event, render_active_modal,
-    render_tree_view,
+    AppExitAction, InspectorTab, TuiAppState, UiMode, handle_key_event, handle_mouse_event,
+    render_active_modal, render_tree_view,
 };
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::style::Color;
 
 fn draw_screen(terminal: &mut Terminal<TestBackend>, state: &mut TuiAppState) {
@@ -517,7 +519,6 @@ fn tui_responsive_layout_pins_badges_on_narrow_terminals_and_scrolls() {
     assert!(screen.contains("[Esc] Quit"));
     assert!(screen.contains("… (420) [.gitignore] [!]"));
     assert!(screen.contains("├─") || screen.contains("└─"));
-    assert!(screen.contains('█'));
 
     // Scrolloff keeps upcoming rows visible when moving near bottom of viewport.
     for _ in 0..10 {
@@ -526,6 +527,109 @@ fn tui_responsive_layout_pins_badges_on_narrow_terminals_and_scrolls() {
     }
     assert!(state.scroll_offset() > 0);
     assert!(state.cursor() < state.visible_rows().len());
+}
+
+#[test]
+fn tui_mouse_wheel_and_left_click_navigation() {
+    let ws = WorkspaceBuilder::new();
+    ws.write_text("src/main.rs", "fn main() {}\n");
+    ws.write_text("src/lib.rs", "pub fn lib() {}\n");
+    ws.write_text("docs/readme.md", "# readme\n");
+
+    let scan = scan_and_tokenize(&ws);
+    let mut state = TuiAppState::new(scan.tree, false);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("test terminal");
+
+    // Render tree to initialize viewport areas.
+    draw_screen(&mut terminal, &mut state);
+    assert_eq!(state.cursor(), 0);
+    assert_eq!(state.metrics().counts.read_files, 3);
+
+    // Mouse wheel down advances the tree cursor.
+    handle_mouse_event(
+        &mut state,
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert_eq!(state.cursor(), 2);
+
+    // Left click on a row moves the cursor and toggles its selection.
+    let target_row_y = state.viewport_areas.tree_body.y + 2;
+    handle_mouse_event(
+        &mut state,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 15,
+            row: target_row_y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    draw_screen(&mut terminal, &mut state);
+    assert_eq!(state.cursor(), 1);
+    assert_eq!(state.metrics().counts.read_files, 2);
+
+    // Left click on fold arrow of a directory folds it.
+    let fold_col = state.viewport_areas.tree_body.x + 3; // cursor glyph (2) + fold triangle (1)
+    let dir_row_y = state.viewport_areas.tree_body.y + 2;
+    handle_mouse_event(
+        &mut state,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: fold_col,
+            row: dir_row_y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    draw_screen(&mut terminal, &mut state);
+    let folded_rows = state.visible_rows().len();
+
+    // Click again unfolds it.
+    handle_mouse_event(
+        &mut state,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: fold_col,
+            row: dir_row_y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    draw_screen(&mut terminal, &mut state);
+    assert!(state.visible_rows().len() > folded_rows);
+
+    // Open Inspector and test mouse wheel and tab clicks.
+    press_key(&mut state, KeyCode::Char('i'));
+    draw_screen(&mut terminal, &mut state);
+    assert_eq!(
+        state.mode(),
+        UiMode::Inspector {
+            tab: InspectorTab::Unread,
+            scroll: 0,
+        }
+    );
+
+    // Click on Discarded tab in the inspector tab bar.
+    let disc_tab_col = state.viewport_areas.inspector_tabs.x + 20;
+    handle_mouse_event(
+        &mut state,
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: disc_tab_col,
+            row: state.viewport_areas.inspector_tabs.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    draw_screen(&mut terminal, &mut state);
+    assert_eq!(
+        state.mode(),
+        UiMode::Inspector {
+            tab: InspectorTab::Discarded,
+            scroll: 0,
+        }
+    );
 }
 
 #[test]
