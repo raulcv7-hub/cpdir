@@ -13,6 +13,7 @@ pub(crate) struct InspectorState {
     entries: Vec<InspectorEntry>,
     cursor: usize,
     scroll: usize,
+    viewport_height: usize,
     status_note: Option<String>,
 }
 
@@ -24,6 +25,7 @@ impl InspectorState {
             entries: collect_tab_entries(tree, metrics, tab),
             cursor: 0,
             scroll: 0,
+            viewport_height: 14,
             status_note: None,
         }
     }
@@ -57,10 +59,18 @@ impl InspectorState {
         self.status_note = Some(note.into());
     }
 
+    pub(crate) fn ensure_cursor_visible(&mut self, viewport_height: usize) {
+        if viewport_height == 0 {
+            return;
+        }
+        self.viewport_height = viewport_height;
+        self.clamp_scroll();
+    }
+
     pub(crate) fn restore_cursor(&mut self, prev_cursor: usize) {
         if let Some(max_idx) = self.entries.len().checked_sub(1) {
             self.cursor = prev_cursor.min(max_idx);
-            self.clamp_scroll(14);
+            self.clamp_scroll();
         } else {
             self.cursor = 0;
             self.scroll = 0;
@@ -80,7 +90,7 @@ impl InspectorState {
                 .saturating_add(delta.cast_unsigned())
                 .min(max_idx)
         };
-        self.clamp_scroll(14);
+        self.clamp_scroll();
     }
 
     pub(crate) const fn move_home(&mut self) {
@@ -91,7 +101,7 @@ impl InspectorState {
     pub(crate) fn move_end(&mut self) {
         if let Some(max_idx) = self.entries.len().checked_sub(1) {
             self.cursor = max_idx;
-            self.clamp_scroll(14);
+            self.clamp_scroll();
         }
     }
 
@@ -99,11 +109,14 @@ impl InspectorState {
         self.entries.get(self.cursor)
     }
 
-    fn clamp_scroll(&mut self, nominal_height: usize) {
+    fn clamp_scroll(&mut self) {
+        let vh = self.viewport_height.max(1);
+        let max_start = self.entries.len().saturating_sub(vh);
+        self.scroll = self.scroll.min(max_start);
         if self.cursor < self.scroll {
             self.scroll = self.cursor;
-        } else if self.cursor >= self.scroll + nominal_height {
-            self.scroll = self.cursor + 1 - nominal_height;
+        } else if self.cursor >= self.scroll + vh {
+            self.scroll = self.cursor + 1 - vh;
         }
     }
 }
@@ -111,7 +124,13 @@ impl InspectorState {
 impl TuiAppState {
     /// Opens the unified inspector modal directly on `tab`.
     pub fn open_inspector_tab(&mut self, tab: InspectorTab) {
-        self.modal = ActiveModal::Inspector(InspectorState::new(&self.tree, self.metrics(), tab));
+        let prev_vh = match &self.modal {
+            ActiveModal::Inspector(ins) => ins.viewport_height,
+            _ => 14,
+        };
+        let mut next = InspectorState::new(&self.tree, self.metrics(), tab);
+        next.viewport_height = prev_vh;
+        self.modal = ActiveModal::Inspector(next);
     }
 
     /// Opens the unified inspector overlay mapped from [`InspectorCategory`].
@@ -250,6 +269,7 @@ impl TuiAppState {
 
         let next_ins = if let ActiveModal::Inspector(ins) = &self.modal {
             let mut next = InspectorState::new(&self.tree, self.metrics(), ins.tab());
+            next.viewport_height = ins.viewport_height;
             next.restore_cursor(ins.cursor());
             next.set_status_note(note);
             Some(next)
@@ -260,6 +280,12 @@ impl TuiAppState {
             self.modal = ActiveModal::Inspector(next);
         }
         Some(outcome)
+    }
+
+    pub(crate) fn ensure_inspector_cursor_visible(&mut self, viewport_height: usize) {
+        if let ActiveModal::Inspector(ins) = &mut self.modal {
+            ins.ensure_cursor_visible(viewport_height);
+        }
     }
 
     pub(crate) const fn active_inspector(&self) -> Option<&InspectorState> {
