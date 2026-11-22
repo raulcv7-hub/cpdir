@@ -1,14 +1,12 @@
-//! Verification tests ensuring the real workspace, Git, and strict XML harness behaves accurately.
-
-mod common;
+//! Smoke verification tests ensuring the shared workspace, Git, and XML validator harness works.
 
 use std::fs;
 
-use common::git_repo::GitRepoHarness;
-use common::workspace::{
+use crate::common::git_repo::GitRepoHarness;
+use crate::common::workspace::{
     WorkspaceBuilder, mid_stream_corrupt_utf8_bytes, sample_png_bytes, utf16_le_with_bom_bytes,
 };
-use common::xml_validator::{ParsedXmlFile, parse_strict_xml};
+use crate::common::xml_validator::{ParsedXmlFile, parse_strict_xml};
 
 #[test]
 fn workspace_harness_materializes_real_files_binaries_and_empty_dirs() {

@@ -1,58 +1,15 @@
-//! Real-disk multi-run persistence, mutation evolution, and corrupt-state recovery tests.
-
-mod common;
+//! Multi-run delta persistence, disk mutation evolution, and corrupt-state recovery tests.
 
 use std::fs;
 use std::path::PathBuf;
 
-use common::workspace::WorkspaceBuilder;
-use common::xml_validator::parse_strict_xml;
-use cpdir::config::defaults::DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD;
-use cpdir::domain::{DirectoryTree, NodeId, NodeKind};
 use cpdir::output::render_strict_xml;
-use cpdir::scanner::{ScanConfig, ScanResult, scan_directory};
 use cpdir::state::{MemoryStore, SavedWorkspaceState, StateError, normalize_dir_for_hash};
-use cpdir::tokens::{TokenCounter, populate_token_counts};
 use cpdir::tui::TuiAppState;
 
-fn scan_and_tokenize(ws: &WorkspaceBuilder) -> ScanResult {
-    let mut scan = scan_directory(ws.root(), &ScanConfig::default()).expect("scan");
-    let counter = TokenCounter::o200k().expect("o200k");
-    populate_token_counts(
-        &mut scan.tree,
-        &scan.contents,
-        DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD,
-        counter,
-    );
-    scan
-}
-
-fn find_node(tree: &DirectoryTree, rel_path: &str) -> NodeId {
-    let idx = tree
-        .nodes()
-        .iter()
-        .position(|n| n.rel_path == rel_path)
-        .unwrap_or_else(|| panic!("missing node for {rel_path}"));
-
-    if let Some(row) = tree
-        .visible_rows()
-        .into_iter()
-        .find(|r| r.node_id.index() == idx)
-    {
-        return row.node_id;
-    }
-
-    for node in tree.nodes() {
-        if let NodeKind::Directory(dir) = &node.kind {
-            for &cid in &dir.children {
-                if cid.index() == idx {
-                    return cid;
-                }
-            }
-        }
-    }
-    panic!("could not resolve NodeId for {rel_path}")
-}
+use crate::common::scan_helpers::{find_node_id, scan_and_analyze};
+use crate::common::workspace::WorkspaceBuilder;
+use crate::common::xml_validator::parse_strict_xml;
 
 #[test]
 fn multi_run_disk_mutation_preserves_deltas_and_auto_includes_new_files() {
@@ -70,14 +27,12 @@ fn multi_run_disk_mutation_preserves_deltas_and_auto_includes_new_files() {
     ws.write_text("logs/debug.log", "ignored log\n");
     ws.write_text("data/big_53k.json", &row.repeat(3_800));
 
-    // Run 1: deselect `docs/`, deselect `src/lib.rs`, force-include `ignored.log` and `big_53k`,
-    // and disable git context toggle.
-    let scan1 = scan_and_tokenize(&ws);
+    let scan1 = scan_and_analyze(&ws);
     let mut tree1 = scan1.tree;
-    tree1.toggle_selection(find_node(&tree1, "docs"));
-    tree1.toggle_selection(find_node(&tree1, "src/lib.rs"));
-    tree1.toggle_selection(find_node(&tree1, "ignored.log"));
-    tree1.toggle_selection(find_node(&tree1, "data/big_53k.json"));
+    tree1.toggle_selection(find_node_id(&tree1, "docs"));
+    tree1.toggle_selection(find_node_id(&tree1, "src/lib.rs"));
+    tree1.toggle_selection(find_node_id(&tree1, "ignored.log"));
+    tree1.toggle_selection(find_node_id(&tree1, "data/big_53k.json"));
 
     let mut ui1 = TuiAppState::new(tree1, true);
     ui1.toggle_git_context();
@@ -90,14 +45,12 @@ fn multi_run_disk_mutation_preserves_deltas_and_auto_includes_new_files() {
     );
     store.save(ws.root(), &saved1).expect("save run 1");
 
-    // Mutate disk before Run 2: add new files under active & excluded folders, delete `old.md`.
     ws.write_text("src/new_module.rs", "pub fn brand_new() {}\n");
     ws.write_text("docs/new_draft.md", "# New draft inside excluded docs\n");
     ws.write_text("logs/new_trace.log", "new ignored trace\n");
     fs::remove_file(ws.root().join("docs/old.md")).expect("remove old.md");
 
-    // Run 2: load persisted deltas and verify literal XML files emitted.
-    let mut scan2 = scan_and_tokenize(&ws);
+    let mut scan2 = scan_and_analyze(&ws);
     let loaded = store
         .load(ws.root())
         .expect("valid json")
@@ -135,10 +88,10 @@ fn nested_unexclusion_survives_disk_reload_and_select_all_cleans_state_file() {
     ws.write_text("parent/a.rs", "fn a() {}\n");
     ws.write_text("parent/sub/b.rs", "fn b() {}\n");
 
-    let scan1 = scan_and_tokenize(&ws);
+    let scan1 = scan_and_analyze(&ws);
     let mut tree1 = scan1.tree;
-    tree1.toggle_selection(find_node(&tree1, "parent"));
-    tree1.toggle_selection(find_node(&tree1, "parent/sub"));
+    tree1.toggle_selection(find_node_id(&tree1, "parent"));
+    tree1.toggle_selection(find_node_id(&tree1, "parent/sub"));
 
     let state1 = SavedWorkspaceState::new(
         normalize_dir_for_hash(ws.root()),
@@ -147,11 +100,10 @@ fn nested_unexclusion_survives_disk_reload_and_select_all_cleans_state_file() {
     );
     store.save(ws.root(), &state1).expect("save nested state");
 
-    // Mutate disk: add sibling under excluded `parent/` and child under re-enabled `parent/sub/`.
     ws.write_text("parent/new_sibling.rs", "fn sibling() {}\n");
     ws.write_text("parent/sub/new_child.rs", "fn child() {}\n");
 
-    let mut scan2 = scan_and_tokenize(&ws);
+    let mut scan2 = scan_and_analyze(&ws);
     let loaded2 = store.load(ws.root()).expect("load").expect("present");
     scan2.tree.apply_overrides(&loaded2.overrides);
 
@@ -160,7 +112,6 @@ fn nested_unexclusion_survives_disk_reload_and_select_all_cleans_state_file() {
     let paths: Vec<String> = parsed.files.into_iter().map(|f| f.path).collect();
     assert_eq!(paths, vec!["parent/sub/b.rs", "parent/sub/new_child.rs"]);
 
-    // Resetting to defaults deletes stale state JSON from disk cleanly.
     scan2.tree.select_all_default();
     let state3 = SavedWorkspaceState::new(
         normalize_dir_for_hash(ws.root()),
@@ -191,7 +142,6 @@ fn normalizes_windows_path_variants_and_degrades_safely_on_corrupt_or_future_sch
         assert_eq!(path_base, store.state_file_path(&upper));
     }
 
-    // Saving leaves no `.tmp` files behind.
     let saved = SavedWorkspaceState::new("demo", [("a.rs".to_owned(), false)].into(), None);
     store.save(ws.root(), &saved).expect("save");
     let leftovers: Vec<_> = fs::read_dir(state_ws.root())
@@ -201,7 +151,6 @@ fn normalizes_windows_path_variants_and_degrades_safely_on_corrupt_or_future_sch
         .collect();
     assert_eq!(leftovers.len(), 0);
 
-    // Corrupt JSON -> explicit error in strict `load`, safe `None` in `load_lenient`.
     fs::write(&path_base, "{truncated json").expect("write corrupt");
     assert!(matches!(
         store.load(ws.root()),
@@ -209,7 +158,6 @@ fn normalizes_windows_path_variants_and_degrades_safely_on_corrupt_or_future_sch
     ));
     assert_eq!(store.load_lenient(ws.root()), None);
 
-    // Future incompatible schema version -> explicit error in `load`, safe `None` in `load_lenient`.
     fs::write(
         &path_base,
         r#"{"schema_version":99,"workspace_path":"x","overrides":{}}"#,

@@ -1,13 +1,8 @@
 //! End-to-end orchestration tests for `WorkspaceSession` without requiring a physical TTY.
 
-mod common;
-
 use std::cell::RefCell;
 use std::fs;
 
-use common::git_repo::GitRepoHarness;
-use common::workspace::WorkspaceBuilder;
-use common::xml_validator::parse_strict_xml;
 use cpdir::application::{AppError, RunOutcome, WorkspaceSession};
 use cpdir::config::limits::DEFAULT_RESCAN_MAX_ENTRIES;
 use cpdir::domain::{FileDiscardReason, InspectorTab};
@@ -15,6 +10,10 @@ use cpdir::git::GitContextConfig;
 use cpdir::output::{ClipboardError, ClipboardWriter};
 use cpdir::scanner::{ContentHydrationError, ScanConfig, ScanError};
 use cpdir::state::MemoryStore;
+
+use crate::common::git_repo::GitRepoHarness;
+use crate::common::workspace::WorkspaceBuilder;
+use crate::common::xml_validator::parse_strict_xml;
 
 #[derive(Default)]
 struct RecordingClipboard {
@@ -57,7 +56,6 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
     assert!(state.git_context_tokens() > 0);
     assert_eq!(state.metrics().counts.read_files, 2);
 
-    // Discarded[0] is `.git`; Discarded[1] is `vendor`. Re-ingest `vendor/` via Inspector.
     state.open_inspector_tab(InspectorTab::Discarded);
     state.scroll_inspector(1);
     state.toggle_inspector_selection();
@@ -70,7 +68,6 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
             .any(|n| n.rel_path == "vendor/dep.rs")
     );
 
-    // Switch to Unread (`ignored.log`, `[DIR] vendor/`, `vendor/dep.rs`) and enable `vendor/dep.rs`.
     state.open_inspector_tab(InspectorTab::Unread);
     state.scroll_inspector(2);
     state.toggle_inspector_selection();
@@ -92,7 +89,6 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
     let paths: Vec<String> = parsed.files.into_iter().map(|f| f.path).collect();
     assert_eq!(paths, vec!["src/main.rs", "vendor/dep.rs", ".gitignore"]);
 
-    // Second run with added file remembers git_context=false and auto-includes new file.
     ws.write_text("src/added.rs", "pub fn added() {}\n");
     let (_session2, state2) = WorkspaceSession::open(
         ws.root(),
@@ -123,7 +119,6 @@ fn workspace_session_cancel_and_hydration_failure_leave_clipboard_untouched() {
     )
     .expect("open workspace");
 
-    // Cancel path does not write clipboard or persist state.
     state.cancel_exit();
     let clipboard = RecordingClipboard::default();
     assert_eq!(
@@ -135,7 +130,6 @@ fn workspace_session_cancel_and_hydration_failure_leave_clipboard_untouched() {
     assert_eq!(clipboard.copied.borrow().len(), 0);
     assert!(!store.state_file_path(ws.root()).exists());
 
-    // Enabling a >64 KiB dropped file after deletion on disk fails hydration cleanly.
     let (mut session2, mut state2) = WorkspaceSession::open(
         ws.root(),
         store,

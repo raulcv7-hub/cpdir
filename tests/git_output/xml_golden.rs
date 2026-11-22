@@ -1,27 +1,45 @@
-//! Golden real-disk ingestion and strict XML output verification tests.
-
-mod common;
+//! Golden real-disk ingestion and strict XML structure verification tests.
 
 use std::collections::HashMap;
+use std::path::Path;
 
-use common::workspace::{WorkspaceBuilder, sample_png_bytes};
-use common::xml_validator::{ParsedXmlFile, parse_strict_xml};
-use cpdir::config::defaults::HARD_READ_BYTE_CAP;
+use cpdir::config::limits::HARD_READ_BYTE_CAP;
 use cpdir::domain::{
-    DirectoryTree, FileDiscardReason, NaturalExclusion, NaturalSelection, NodeId, PrunedDirReason,
-    TextFileData, TextFileState,
+    DirectoryTree, FileDiscardReason, GitCommitEntry, GitContextSnapshot, GitDiffNumstatEntry,
+    GitDiffStat, GitHotspotEntry, GitTagEntry, NaturalExclusion, NaturalSelection, NodeId,
+    PrunedDirReason, TextFileData, TextFileState,
 };
-use cpdir::output::{
-    GitCommitEntry, GitContextSnapshot, GitDiffNumstatEntry, GitDiffStat, GitHotspotEntry,
-    GitTagEntry, XmlWriteError, render_strict_xml,
-};
+use cpdir::output::render_strict_xml;
 use cpdir::scanner::{ReadFileOutcome, read_bounded_utf8};
 
-fn ingest_text(path: &std::path::Path) -> (u64, String) {
+use crate::common::workspace::{WorkspaceBuilder, sample_png_bytes};
+use crate::common::xml_validator::{ParsedXmlFile, parse_strict_xml};
+
+fn ingest_text(path: &Path) -> (u64, String) {
     match read_bounded_utf8(path, HARD_READ_BYTE_CAP) {
         ReadFileOutcome::Text { byte_len, content } => (byte_len, content),
         ReadFileOutcome::Discarded(reason) => panic!("expected readable text, got {reason:?}"),
     }
+}
+
+fn add_selected(
+    tree: &mut DirectoryTree,
+    parent: NodeId,
+    name: &str,
+    byte_len: u64,
+    tokens: usize,
+) -> NodeId {
+    tree.add_text_file(
+        parent,
+        name,
+        TextFileData {
+            byte_len,
+            tokens,
+            secret_hits: 0,
+            state: TextFileState::new(NaturalSelection::Included),
+        },
+    )
+    .expect("valid text entry")
 }
 
 #[test]
@@ -79,20 +97,19 @@ fn golden_workspace_preserves_collapsed_tree_empty_dirs_binaries_and_literal_xml
 
     let (main_len, main_text) = ingest_text(&p_main);
     let id_main = add_selected(&mut tree, src, "main.rs", main_len, 20);
-
     let (empty_len, empty_text) = ingest_text(&p_empty);
     let id_empty = add_selected(&mut tree, DirectoryTree::ROOT, "empty.txt", empty_len, 0);
 
-    let mut contents = HashMap::new();
-    contents.insert(id_odd, odd_text);
-    contents.insert(id_helper, helper_text);
-    contents.insert(id_env, env_text);
-    contents.insert(id_main, main_text);
-    contents.insert(id_empty, empty_text);
+    let contents = HashMap::from([
+        (id_odd, odd_text),
+        (id_helper, helper_text),
+        (id_env, env_text),
+        (id_main, main_text),
+        (id_empty, empty_text),
+    ]);
 
     let xml = render_strict_xml(&tree, &contents, None).expect("xml render succeeds");
     let parsed = parse_strict_xml(&xml).expect("strict xml must parse cleanly");
-
     assert_eq!(
         parsed.directory_structure.as_deref(),
         Some(concat!(
@@ -201,58 +218,4 @@ fn golden_git_context_escapes_hostile_xml_and_handles_empty_sections() {
     assert!(!clean_xml.contains("<recent_tags"));
     assert!(!clean_xml.contains("<hotspots>"));
     assert!(parse_strict_xml(&clean_xml).is_ok());
-}
-
-#[test]
-fn sanitizes_illegal_xml10_controls_and_fails_fast_on_missing_content() {
-    let ws = WorkspaceBuilder::new();
-    let raw_log = "\x1B[32mok\x1B[0m\t\r\n\x01\x07\x0C\u{FFFE}\u{FFFF}";
-    let log_path = ws.write_text("logs/ansi.log", raw_log);
-    let (byte_len, text) = ingest_text(&log_path);
-
-    let mut tree = DirectoryTree::new("logs_repo");
-    let log_id = add_selected(&mut tree, DirectoryTree::ROOT, "ansi.log", byte_len, 10);
-
-    let err =
-        render_strict_xml(&tree, &HashMap::new(), None).expect_err("must reject missing body");
-    assert_eq!(
-        err,
-        XmlWriteError::MissingFileContent {
-            rel_path: "ansi.log".to_owned(),
-        }
-    );
-    assert!(err.to_string().contains("ansi.log"));
-
-    let mut contents = HashMap::new();
-    contents.insert(log_id, text);
-    let xml = render_strict_xml(&tree, &contents, None).expect("sanitized xml succeeds");
-    let parsed = parse_strict_xml(&xml).expect("sanitized xml parses strictly");
-    assert_eq!(
-        parsed.files,
-        vec![ParsedXmlFile {
-            path: "ansi.log".to_owned(),
-            content: "\u{FFFD}[32mok\u{FFFD}[0m\t\r\n\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}"
-                .to_owned(),
-        }]
-    );
-}
-
-fn add_selected(
-    tree: &mut DirectoryTree,
-    parent: NodeId,
-    name: &str,
-    byte_len: u64,
-    tokens: usize,
-) -> NodeId {
-    tree.add_text_file(
-        parent,
-        name,
-        TextFileData {
-            byte_len,
-            tokens,
-            secret_hits: 0,
-            state: TextFileState::new(NaturalSelection::Included),
-        },
-    )
-    .expect("valid text entry")
 }

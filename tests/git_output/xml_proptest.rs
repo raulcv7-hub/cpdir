@@ -1,12 +1,8 @@
 //! Property-based round-trip and adversarial path/content tests for strict XML emission.
 
-mod common;
-
 use std::collections::HashMap;
 
-use common::workspace::WorkspaceBuilder;
-use common::xml_validator::{ParsedXmlFile, parse_strict_xml};
-use cpdir::config::defaults::HARD_READ_BYTE_CAP;
+use cpdir::config::limits::HARD_READ_BYTE_CAP;
 use cpdir::domain::{
     DirectoryTree, FileDiscardReason, NaturalExclusion, NaturalSelection, NodeKind, TextFileData,
     TextFileState,
@@ -14,6 +10,9 @@ use cpdir::domain::{
 use cpdir::output::render_strict_xml;
 use cpdir::scanner::{ReadFileOutcome, read_bounded_utf8};
 use proptest::prelude::*;
+
+use crate::common::workspace::WorkspaceBuilder;
+use crate::common::xml_validator::{ParsedXmlFile, parse_strict_xml};
 
 fn expected_xml10_sanitized(input: &str) -> String {
     input
