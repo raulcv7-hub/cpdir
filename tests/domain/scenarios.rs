@@ -171,7 +171,6 @@ fn mixed_folder_toggle_protects_secrets_and_oversized_files() {
         ]
     );
 
-    // Secret alert counter tracks only selected secret-bearing files.
     f.tree.toggle_selection(f.env_file);
     assert_eq!(f.tree.compute_metrics().counts.active_secret_files, 1);
     f.tree.toggle_selection(f.env_file);
@@ -207,8 +206,7 @@ fn deep_nesting_3000_levels_is_stack_safe_and_exact() {
     assert_eq!(tree.visible_rows().len(), 3_007);
 
     tree.toggle_selection(dir_chain[1_000]);
-    let overrides = tree.collect_overrides();
-    assert_eq!(overrides.get("d0/d1/d2"), None);
+    assert_eq!(tree.collect_overrides().get("d0/d1/d2"), None);
     assert_eq!(tree.compute_metrics().counts.read_files, 2);
 
     tree.toggle_selection(DirectoryTree::ROOT);
@@ -254,7 +252,6 @@ fn reingested_pruned_subtree_stays_excluded_on_select_all_default_and_clean_over
     assert_eq!(tree.collect_overrides(), BTreeMap::new());
     assert_eq!(tree.compute_metrics().counts.read_files, 1);
 
-    // Resetting or cycling All/None must never auto-enable re-ingested pruned files.
     tree.unselect_all();
     tree.select_all_default();
     assert_eq!(tree.compute_metrics().counts.read_files, 1);
@@ -266,7 +263,6 @@ fn reingested_pruned_subtree_stays_excluded_on_select_all_default_and_clean_over
         ]
     );
 
-    // Explicit selection of a file inside vendor persists only that delta.
     let vendor_dep = outcome.id_map[1].1;
     tree.toggle_selection(vendor_dep);
     assert_eq!(tree.compute_metrics().counts.read_files, 2);
