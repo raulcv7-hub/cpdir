@@ -89,10 +89,12 @@ pub(super) fn load_workspace_interactive(
     guard: &mut TerminalGuard,
     cfg: &LoadConfig<'_>,
 ) -> Result<Option<LoadedWorkspace>, AppError> {
-    let cancel = Arc::new(AtomicBool::new(false));
+    let scan_cancel = Arc::new(AtomicBool::new(false));
+    let git_cancel = Arc::new(AtomicBool::new(false));
     let root_name = resolve_root_name(cfg.target_dir);
     let mut progress = LoadingProgress::new(root_name.clone());
-    let (mut bg_git, scan_rx, _scan_guard) = spawn_workers(cfg, root_name, &cancel);
+    let (mut bg_git, scan_rx, _scan_guard) =
+        spawn_workers(cfg, root_name, &scan_cancel, &git_cancel);
 
     let mut git_state = GitResolveState::Pending;
     let mut needs_draw = true;
@@ -119,7 +121,7 @@ pub(super) fn load_workspace_interactive(
             needs_draw = false;
         }
 
-        if poll_loading_cancel(&cancel, &mut needs_draw)? {
+        if poll_loading_cancel(&scan_cancel, &git_cancel, &mut needs_draw)? {
             return Ok(None);
         }
     }
@@ -128,7 +130,8 @@ pub(super) fn load_workspace_interactive(
 fn spawn_workers(
     cfg: &LoadConfig<'_>,
     root_name: String,
-    cancel: &Arc<AtomicBool>,
+    scan_cancel: &Arc<AtomicBool>,
+    git_cancel: &Arc<AtomicBool>,
 ) -> (
     Option<BackgroundGit>,
     Receiver<ScanWorkerMsg>,
@@ -136,21 +139,21 @@ fn spawn_workers(
 ) {
     let (git_tx, git_rx) = mpsc::channel();
     let git_dir = cfg.target_dir.to_path_buf();
-    let git_cancel = Arc::clone(cancel);
+    let git_worker_cancel = Arc::clone(git_cancel);
     let git_cfg = cfg.git_config;
     let git_handle = thread::spawn(move || {
-        let snap = extract_git_context_cancelable(&git_dir, &git_cfg, &git_cancel);
+        let snap = extract_git_context_cancelable(&git_dir, &git_cfg, &git_worker_cancel);
         let _ = git_tx.send(snap);
     });
     let bg_git = Some(BackgroundGit {
-        cancel: Arc::clone(cancel),
+        cancel: Arc::clone(git_cancel),
         rx: git_rx,
         handle: Some(git_handle),
     });
 
     let (scan_tx, scan_rx) = mpsc::channel();
     let scan_dir = cfg.target_dir.to_path_buf();
-    let scan_cancel = Arc::clone(cancel);
+    let scan_worker_cancel = Arc::clone(scan_cancel);
     let scan_cfg = cfg.scan_config;
     let scan_handle = thread::spawn(move || {
         let mut local_prog = LoadingProgress::new(root_name);
@@ -158,7 +161,7 @@ fn spawn_workers(
         let res = scan_and_ingest_streaming(
             &scan_dir,
             &scan_cfg,
-            Some(&scan_cancel),
+            Some(&scan_worker_cancel),
             &mut local_prog,
             &mut |snapshot| {
                 let now = Instant::now();
@@ -171,7 +174,7 @@ fn spawn_workers(
         let _ = scan_tx.send(ScanWorkerMsg::Finished(res));
     });
     let scan_guard = ScanWorkerGuard {
-        cancel: Arc::clone(cancel),
+        cancel: Arc::clone(scan_cancel),
         handle: Some(scan_handle),
     };
 
@@ -238,12 +241,17 @@ fn finalize_loaded_workspace(
     }
 }
 
-fn poll_loading_cancel(cancel: &Arc<AtomicBool>, needs_draw: &mut bool) -> Result<bool, AppError> {
+fn poll_loading_cancel(
+    scan_cancel: &Arc<AtomicBool>,
+    git_cancel: &Arc<AtomicBool>,
+    needs_draw: &mut bool,
+) -> Result<bool, AppError> {
     if event::poll(LOADING_POLL_INTERVAL).map_err(|err| AppError::TerminalIo(err.to_string()))? {
         while event::poll(Duration::ZERO).map_err(|err| AppError::TerminalIo(err.to_string()))? {
             let ev = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
             if is_cancel_event(&ev) {
-                cancel.store(true, Ordering::Release);
+                scan_cancel.store(true, Ordering::Release);
+                git_cancel.store(true, Ordering::Release);
                 return Ok(true);
             }
             if matches!(ev, Event::Resize(_, _)) {
