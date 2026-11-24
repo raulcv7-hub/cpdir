@@ -1,4 +1,4 @@
-//! Pure Ratatui presentation modules reading immutable [`TuiAppState`].
+//! Pure Ratatui presentation modules reading immutable [`TuiAppState`] and [`LoadingProgress`].
 
 mod badges;
 mod confirm_modals;
@@ -6,6 +6,7 @@ mod help_modal;
 mod inspector_modal;
 mod inspector_row;
 mod inspector_tabs;
+pub mod loading_view;
 mod text_fit;
 pub mod theme;
 mod tree_chrome;
@@ -21,6 +22,7 @@ use confirm_modals::{render_confirm_empty_modal, render_confirm_secrets_modal};
 use help_modal::render_help_modal;
 use inspector_modal::render_inspector_modal;
 
+pub use loading_view::render_loading_view;
 pub use theme::{
     NodeVisualKind, cursor_glyph_style, cursor_row_style, format_token_count, node_label_style,
     sanitize_tui_label, secret_marker_style, secret_rule_label, total_tokens_style,

@@ -15,4 +15,6 @@ pub use content_store::{
 pub use file_reader::{ReadFileOutcome, read_bounded_utf8};
 pub use ignore_rules::{IgnoreDecision, IgnoreRuleStack};
 pub use rescan::{DEFAULT_RESCAN_MAX_ENTRIES, RescanOutcome, rescan_pruned_dir};
+pub(crate) use traversal::DiscoveredFile;
+pub(crate) use walker::discover_workspace_entries;
 pub use walker::{ScanConfig, ScanError, ScanResult, scan_directory};

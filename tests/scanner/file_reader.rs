@@ -1,8 +1,8 @@
-//! Real-disk ingestion tests for UTF-8 BOMs, binaries, legacy encodings, and size caps.
+//! Real-disk ingestion tests for UTF-8 BOMs, 8 KiB probing, binaries, and size caps.
 
 use std::path::Path;
 
-use cpdir::config::limits::HARD_READ_BYTE_CAP;
+use cpdir::config::limits::{FILE_HEADER_PROBE_BYTES, HARD_READ_BYTE_CAP};
 use cpdir::config::rules::{is_known_binary_extension, is_pruned_dir_name, should_prune_dir};
 use cpdir::domain::FileDiscardReason;
 use cpdir::scanner::{ReadFileOutcome, read_bounded_utf8};
@@ -60,6 +60,41 @@ fn reads_utf8_boms_crlf_cjk_ansi_logs_and_empty_files() {
 }
 
 #[test]
+fn probe_handles_multibyte_boundary_and_rejects_early_or_late_binaries() {
+    let ws = WorkspaceBuilder::new();
+
+    // Place a 4-byte emoji strictly across the 8 KiB probe boundary so probe never false-rejects.
+    let mut split_utf8 = vec![b'a'; FILE_HEADER_PROBE_BYTES - 2];
+    split_utf8.extend_from_slice("🚀".as_bytes());
+    split_utf8.extend_from_slice(&vec![b'b'; 4_096]);
+    let split_path = ws.write_bytes("split_emoji.txt", &split_utf8);
+    let expected = String::from_utf8(split_utf8.clone()).expect("valid utf8");
+    assert_eq!(
+        read_bounded_utf8(&split_path, HARD_READ_BYTE_CAP),
+        ReadFileOutcome::Text {
+            byte_len: u64::try_from(split_utf8.len()).expect("len fits u64"),
+            content: expected,
+        }
+    );
+
+    let mut late_corrupt = vec![b'x'; FILE_HEADER_PROBE_BYTES + 200];
+    late_corrupt.extend_from_slice(&[0xFF, 0xFE, 0x80]);
+    let late_corrupt_path = ws.write_bytes("late_corrupt.txt", &late_corrupt);
+    assert_eq!(
+        read_bounded_utf8(&late_corrupt_path, HARD_READ_BYTE_CAP),
+        ReadFileOutcome::Discarded(FileDiscardReason::InvalidUtf8)
+    );
+
+    let mut custom_bin = vec![b'V'; 128 * 1024];
+    custom_bin[32] = 0;
+    let custom_bin_path = ws.write_bytes("cache.vk_custom", &custom_bin);
+    assert_eq!(
+        read_bounded_utf8(&custom_bin_path, HARD_READ_BYTE_CAP),
+        ReadFileOutcome::Discarded(FileDiscardReason::Binary)
+    );
+}
+
+#[test]
 fn discards_binaries_across_extensions_case_magic_headers_and_null_positions() {
     let ws = WorkspaceBuilder::new();
     let png = sample_png_bytes();
@@ -76,6 +111,10 @@ fn discards_binaries_across_extensions_case_magic_headers_and_null_positions() {
         ("dist/App.EXE", b"plain ascii text"),
         ("pkg/Archive.ZiP", b"plain ascii text"),
         ("bin/Module.WASM", b"plain ascii text"),
+        ("shaders/vert.spv", b"plain ascii text"),
+        ("textures/albedo.dds", b"plain ascii text"),
+        ("scenes/mesh.glb", b"plain ascii text"),
+        ("weights/model.safetensors", b"plain ascii text"),
     ];
     for &(rel, raw) in binary_cases {
         let path = ws.write_bytes(rel, raw);
@@ -92,6 +131,7 @@ fn discards_binaries_across_extensions_case_magic_headers_and_null_positions() {
         ("Makefile", "all:\n\techo ok\n"),
         (".gitignore", "/target/\n"),
         ("odd.tar.rs", "pub fn tar_helper() {}\n"),
+        ("shaders/tri.glsl", "#version 450\nvoid main() {}\n"),
     ];
     for &(rel, text) in text_cases {
         let path = ws.write_text(rel, text);
@@ -191,21 +231,33 @@ fn defaults_pruning_and_binary_extension_tables_preserve_safe_folders() {
         "__PYCACHE__",
         ".Venv",
         ".IDEA",
+        "CMakeFiles",
+        "vcpkg_installed",
+        "cmake-build-release",
+        ".cache",
+        "DerivedDataCache",
     ] {
         assert!(is_pruned_dir_name(dir_name), "should prune {dir_name}");
     }
-    for dir_name in ["bin", "src", "tests", ".vscode", ".github", "assets"] {
+    for dir_name in [
+        "bin", "src", "tests", ".vscode", ".github", "assets", "shaders",
+    ] {
         assert!(!is_pruned_dir_name(dir_name), "must keep {dir_name}");
     }
     assert!(should_prune_dir("apps/web/dist", "dist"));
     assert!(should_prune_dir("services/api/build", "build"));
     assert!(should_prune_dir("infra/.terraform", ".terraform"));
     assert!(should_prune_dir("src/.git", ".git"));
+    assert!(should_prune_dir("engine/CMakeFiles", "CMakeFiles"));
     assert!(!should_prune_dir("src/build", "build"));
     assert!(!should_prune_dir("internal/vendor", "vendor"));
     assert!(!should_prune_dir("lib/dist", "dist"));
 
     assert!(is_known_binary_extension(Path::new("nested/FILE.DLL")));
+    assert!(is_known_binary_extension(Path::new("shaders/sky.SPV")));
+    assert!(is_known_binary_extension(Path::new("textures/env.EXR")));
+    assert!(is_known_binary_extension(Path::new("textures/norm.DDS")));
+    assert!(is_known_binary_extension(Path::new("assets/scene.GLB")));
     assert!(!is_known_binary_extension(Path::new("nested/icon.SVG")));
     assert!(!is_known_binary_extension(Path::new("Cargo.lock")));
 }

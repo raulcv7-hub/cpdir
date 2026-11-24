@@ -1,16 +1,17 @@
-//! Shared scanning, token-counting, secret-scanning, and initial TUI state assembly helpers.
+//! Shared token-counting, secret-scanning, XML delta sizing, and initial TUI state assembly.
 
 use std::collections::HashMap;
 use std::hash::BuildHasher;
-use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::application::error::AppError;
-use crate::config::limits::DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD;
+use crate::config::limits::{
+    DEFAULT_TOKEN_AUTO_DESELECT_THRESHOLD, INLINE_XML_DELTA_BODY_CAP_BYTES,
+};
 use crate::domain::{DirectoryTree, GitContextSnapshot, NodeId, NodeKind};
 use crate::output::{
     render_git_context_xml, render_selected_file_xml, render_xml_structure_envelope,
 };
-use crate::scanner::{ScanConfig, ScanResult, scan_directory};
 use crate::security::{SecretScanner, populate_secret_hits};
 use crate::state::SavedWorkspaceState;
 use crate::tokens::{TokenCounter, populate_token_counts};
@@ -36,70 +37,63 @@ pub fn analyze_tree_contents<S: BuildHasher>(
     Ok(())
 }
 
-pub(super) fn scan_and_analyze(
-    target_dir: &Path,
-    config: &ScanConfig,
-) -> Result<ScanResult, AppError> {
-    let mut scan = scan_directory(target_dir, config).map_err(AppError::Scan)?;
-    analyze_tree_contents(&mut scan.tree, &scan.contents)?;
-    Ok(scan)
+pub(super) fn is_cancelled_flag(cancel: Option<&AtomicBool>) -> bool {
+    cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
 }
 
-pub(super) fn compute_xml_file_tokens<S: BuildHasher>(
-    tree: &DirectoryTree,
-    contents: &HashMap<NodeId, String, S>,
-) -> Result<HashMap<NodeId, usize>, AppError> {
-    let counter = TokenCounter::o200k().map_err(AppError::Tokens)?;
-    let mut rendered = Vec::new();
-    for (idx, node) in tree.nodes().iter().enumerate() {
-        if matches!(node.kind, NodeKind::TextFile(_)) {
-            let id = NodeId(idx);
-            if let Some(body) = contents.get(&id) {
-                let mut buf = String::with_capacity(body.len().saturating_add(64));
-                buf.push('\n');
-                render_selected_file_xml(&node.rel_path, body, &mut buf);
-                if buf.ends_with('\n') {
-                    buf.pop();
-                }
-                rendered.push((id, buf));
-            }
+pub(super) fn compute_selected_xml_delta(
+    counter: TokenCounter,
+    rel_path: &str,
+    body: &str,
+    raw_tokens: usize,
+) -> isize {
+    if body.len() <= INLINE_XML_DELTA_BODY_CAP_BYTES {
+        let mut buf = String::with_capacity(body.len().saturating_add(64));
+        buf.push('\n');
+        render_selected_file_xml(rel_path, body, &mut buf);
+        if buf.ends_with('\n') {
+            buf.pop();
         }
+        let xml_tok = counter.count(&buf);
+        return signed_diff(xml_tok, raw_tokens);
     }
 
-    let work: Vec<(NodeId, &str)> = rendered
-        .iter()
-        .map(|(id, text)| (*id, text.as_str()))
-        .collect();
-    Ok(counter.count_batch(&work).into_iter().collect())
+    // Avoid re-tokenizing multi-megabyte bodies just to account for XML file tags.
+    let wrapper_tok = count_wrapper_only_tokens(counter, rel_path);
+    isize::try_from(wrapper_tok).unwrap_or(isize::MAX)
 }
 
 pub(super) fn compute_xml_overhead_tokens(
     tree: &DirectoryTree,
     abs_root_path: Option<&str>,
-    xml_file_tokens: &HashMap<NodeId, usize>,
+    xml_file_deltas: &HashMap<NodeId, isize>,
 ) -> Result<usize, AppError> {
     let counter = TokenCounter::o200k().map_err(AppError::Tokens)?;
     let envelope = render_xml_structure_envelope(tree, abs_root_path);
     let envelope_tokens = counter.count(&envelope);
 
-    let mut positive_extra = 0usize;
-    let mut negative_extra = 0usize;
+    let mut net_delta: isize = 0;
     for (idx, node) in tree.nodes().iter().enumerate() {
         if let NodeKind::TextFile(file) = &node.kind
             && file.state.is_selected()
-            && let Some(&xml_tok) = xml_file_tokens.get(&NodeId(idx))
         {
-            if xml_tok >= file.tokens {
-                positive_extra = positive_extra.saturating_add(xml_tok - file.tokens);
-            } else {
-                negative_extra = negative_extra.saturating_add(file.tokens - xml_tok);
-            }
+            let delta = xml_file_deltas
+                .get(&NodeId(idx))
+                .copied()
+                .unwrap_or_else(|| {
+                    let w = if file.byte_len == 0 {
+                        count_empty_tag_tokens(counter, &node.rel_path)
+                    } else {
+                        count_wrapper_only_tokens(counter, &node.rel_path)
+                    };
+                    isize::try_from(w).unwrap_or(0)
+                });
+            net_delta = net_delta.saturating_add(delta);
         }
     }
 
-    Ok(envelope_tokens
-        .saturating_add(positive_extra)
-        .saturating_sub(negative_extra))
+    let base = isize::try_from(envelope_tokens).unwrap_or(isize::MAX);
+    Ok(usize::try_from(base.saturating_add(net_delta).max(0)).unwrap_or(0))
 }
 
 pub(super) fn build_initial_tui_state(
@@ -120,4 +114,38 @@ pub(super) fn build_initial_tui_state(
         state.set_include_git_context(git_enabled);
     }
     state
+}
+
+fn count_empty_tag_tokens(counter: TokenCounter, rel_path: &str) -> usize {
+    let mut buf = String::with_capacity(rel_path.len() + 32);
+    buf.push('\n');
+    render_selected_file_xml(rel_path, "", &mut buf);
+    if buf.ends_with('\n') {
+        buf.pop();
+    }
+    counter.count(&buf)
+}
+
+fn count_wrapper_only_tokens(counter: TokenCounter, rel_path: &str) -> usize {
+    let mut buf = String::with_capacity(rel_path.len() + 48);
+    buf.push('\n');
+    render_selected_file_xml(rel_path, " ", &mut buf);
+    if buf.ends_with('\n') {
+        buf.pop();
+    }
+    if let Some((open, close_rest)) = buf.split_once(" ]]>") {
+        let open_with_space = format!("{open} ");
+        let close = format!("]]>{close_rest}");
+        counter.count(&open_with_space) + counter.count(&close)
+    } else {
+        counter.count(&buf)
+    }
+}
+
+fn signed_diff(lhs: usize, rhs: usize) -> isize {
+    if lhs >= rhs {
+        isize::try_from(lhs - rhs).unwrap_or(isize::MAX)
+    } else {
+        -isize::try_from(rhs - lhs).unwrap_or(isize::MAX)
+    }
 }

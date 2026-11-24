@@ -15,34 +15,35 @@ use crate::tui::view::theme::{
 pub(super) fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
     let counts = state.metrics().counts;
     let inner_w = usize::from(area.width.saturating_sub(2));
+    let compact_hdr = inner_w < 68;
+    let sep = if compact_hdr { " | " } else { "  |  " };
     let total_str = format_token_count(state.total_effective_tokens());
 
     let mut top_spans = vec![
-        Span::raw(" Tokens: "),
+        Span::raw(if compact_hdr { " Tok: " } else { " Tokens: " }),
         Span::styled(total_str, total_tokens_style()),
     ];
 
     if area.height < 4 {
-        top_spans.push(Span::raw("  |  "));
+        top_spans.push(Span::raw(sep));
         top_spans.extend(compact_count_spans(counts, inner_w >= 86));
     }
 
     if counts.active_secret_files > 0 {
-        top_spans.push(Span::raw("  |  "));
-        top_spans.push(Span::styled(
-            format!("! Secrets: {}", counts.active_secret_files),
-            secret_marker_style(),
-        ));
+        top_spans.push(Span::raw(sep));
+        let lbl = if compact_hdr {
+            format!("!Sec:{}", counts.active_secret_files)
+        } else {
+            format!("! Secrets: {}", counts.active_secret_files)
+        };
+        top_spans.push(Span::styled(lbl, secret_marker_style()));
     }
-    if state.has_git_context() {
-        top_spans.push(Span::raw("  |  "));
-        top_spans.push(git_status_span(
-            state.include_git_context(),
-            state.git_context_tokens(),
-        ));
+    if state.has_git_context() || state.is_git_pending() {
+        top_spans.push(Span::raw(sep));
+        top_spans.push(git_status_span(state, compact_hdr));
     }
-    top_spans.push(Span::raw("  |  "));
-    top_spans.push(path_status_span(state.include_abs_path()));
+    top_spans.push(Span::raw(sep));
+    top_spans.push(path_status_span(state.include_abs_path(), compact_hdr));
 
     let mut lines = vec![Line::from(top_spans)];
     if area.height >= 4 {
@@ -178,17 +179,25 @@ fn compact_count_spans(counts: CategoryCounts, verbose: bool) -> Vec<Span<'stati
     ]
 }
 
-fn git_status_span(enabled: bool, git_tokens: usize) -> Span<'static> {
-    if enabled {
-        let label = if git_tokens > 0 {
-            format!("Git: ON (+{})", format_token_count(git_tokens))
-        } else {
-            "Git: ON".to_owned()
+fn git_status_span(state: &TuiAppState, compact: bool) -> Span<'static> {
+    if state.is_git_pending() && !state.has_git_context() {
+        return Span::styled(
+            if compact { "G:..." } else { "Git: ..." },
+            Style::new().fg(Color::Rgb(245, 210, 75)),
+        );
+    }
+    if state.include_git_context() {
+        let git_tokens = state.git_context_tokens();
+        let label = match (compact, git_tokens > 0) {
+            (true, true) => format!("G:+{}", format_token_count(git_tokens)),
+            (true, false) => "G:ON".to_owned(),
+            (false, true) => format!("Git: ON (+{})", format_token_count(git_tokens)),
+            (false, false) => "Git: ON".to_owned(),
         };
         Span::styled(label, Style::new().fg(Color::Rgb(85, 220, 125)))
     } else {
         Span::styled(
-            "Git: OFF",
+            if compact { "G:OFF" } else { "Git: OFF" },
             Style::new()
                 .fg(Color::Rgb(120, 125, 135))
                 .add_modifier(Modifier::DIM),
@@ -196,12 +205,15 @@ fn git_status_span(enabled: bool, git_tokens: usize) -> Span<'static> {
     }
 }
 
-fn path_status_span(enabled: bool) -> Span<'static> {
+fn path_status_span(enabled: bool, compact: bool) -> Span<'static> {
     if enabled {
-        Span::styled("Path: ON", Style::new().fg(Color::Rgb(85, 220, 125)))
+        Span::styled(
+            if compact { "P:ON" } else { "Path: ON" },
+            Style::new().fg(Color::Rgb(85, 220, 125)),
+        )
     } else {
         Span::styled(
-            "Path: OFF",
+            if compact { "P:OFF" } else { "Path: OFF" },
             Style::new()
                 .fg(Color::Rgb(120, 125, 135))
                 .add_modifier(Modifier::DIM),

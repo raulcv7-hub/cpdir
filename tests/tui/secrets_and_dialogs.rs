@@ -1,16 +1,20 @@
-//! Purple secret cues, Git token accounting, `Secrets` tab, help modal, and empty-copy guard.
+//! Purple secret cues, Git token accounting, loading view, help modal, and copy guards.
 
 use cpdir::domain::{
     DirectoryTree, NaturalExclusion, NaturalSelection, SecretFinding, SecretRuleKind, TextFileData,
     TextFileState,
 };
-use cpdir::tui::{AppExitAction, TuiAppState, UiMode};
+use cpdir::tui::{
+    AppExitAction, LoadingPhase, LoadingProgress, TuiAppState, UiMode, render_loading_view,
+};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::style::Color;
 
-use crate::common::tui_harness::{draw_and_dump, find_substring_fg, move_cursor_to, press_key};
+use crate::common::tui_harness::{
+    buffer_to_string, draw_and_dump, find_substring_fg, move_cursor_to, press_key,
+};
 
 #[test]
 fn tui_secret_warnings_inspector_tab_git_tokens_and_exclude_action() {
@@ -87,6 +91,16 @@ fn tui_secret_warnings_inspector_tab_git_tokens_and_exclude_action() {
     assert!(modal.contains("- .env (1 hit(s)) - line 4 [AwsAccessKey]"));
     assert!(modal.contains("[x] Exclude flagged"));
 
+    // Pressing 's' inside ConfirmSecrets must NOT silently confirm copy.
+    press_key(&mut state, KeyCode::Char('s'));
+    assert_eq!(state.exit_action(), None);
+    assert_eq!(
+        state.mode(),
+        UiMode::ConfirmSecrets {
+            active_secret_files: 1
+        }
+    );
+
     press_key(&mut state, KeyCode::Char('x'));
     assert_eq!(state.mode(), UiMode::Tree);
     assert_eq!(state.metrics().counts.active_secret_files, 0);
@@ -105,7 +119,7 @@ fn tui_secret_warnings_inspector_tab_git_tokens_and_exclude_action() {
 }
 
 #[test]
-fn tui_help_modal_collapse_expand_all_and_empty_copy_guard() {
+fn tui_help_modal_unselect_loading_view_and_empty_copy_guard() {
     let mut tree = DirectoryTree::new("workspace");
     let sub = tree.add_dir(DirectoryTree::ROOT, "sub", true).expect("sub");
     tree.add_text_file(
@@ -127,6 +141,7 @@ fn tui_help_modal_collapse_expand_all_and_empty_copy_guard() {
     assert_eq!(state.mode(), UiMode::Help);
     let help = draw_and_dump(&mut terminal, &mut state);
     assert!(help.contains("Help - Press Esc or ? to close"));
+    assert!(help.contains("a / u"));
     assert!(help.contains("Secret[!]"));
 
     press_key(&mut state, KeyCode::Esc);
@@ -141,7 +156,7 @@ fn tui_help_modal_collapse_expand_all_and_empty_copy_guard() {
     press_key(&mut state, KeyCode::Home);
     assert_eq!(state.cursor(), 0);
 
-    press_key(&mut state, KeyCode::Char('a'));
+    press_key(&mut state, KeyCode::Char('u'));
     assert_eq!(state.metrics().counts.read_files, 0);
     press_key(&mut state, KeyCode::Enter);
     assert_eq!(state.mode(), UiMode::ConfirmEmptyCopy);
@@ -154,4 +169,21 @@ fn tui_help_modal_collapse_expand_all_and_empty_copy_guard() {
     press_key(&mut state, KeyCode::Enter);
     press_key(&mut state, KeyCode::Char('y'));
     assert_eq!(state.exit_action(), Some(AppExitAction::CopyToClipboard));
+
+    let mut prog = LoadingProgress::new("vulkan_engine");
+    prog.phase = LoadingPhase::Analyzing;
+    prog.dirs_scanned = 120;
+    prog.pruned_dirs = 8;
+    prog.candidate_files = 450;
+    prog.analyzed_files = 225;
+    prog.discarded_files = 90;
+    prog.selected_tokens = 38_400;
+    terminal
+        .draw(|frame| render_loading_view(frame, frame.area(), &prog))
+        .expect("draw loading view");
+    let loading_screen = buffer_to_string(&terminal);
+    assert!(loading_screen.contains("vulkan_engine"));
+    assert!(loading_screen.contains("225/450 analyzed"));
+    assert!(loading_screen.contains("38.4k selected"));
+    assert!(loading_screen.contains("Cancel startup"));
 }

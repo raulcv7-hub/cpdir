@@ -1,4 +1,4 @@
-//! Bounded `UTF-8` reader with fast binary probes, cloud-placeholder guard, and `BOM` handling.
+//! Bounded `UTF-8` reader with `8 KiB` binary probing, cloud-placeholder guard, and `BOM` handling.
 
 use std::fs::File;
 use std::io::Read;
@@ -6,6 +6,7 @@ use std::io::Read;
 use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 
+use crate::config::limits::FILE_HEADER_PROBE_BYTES;
 use crate::config::rules::is_known_binary_extension;
 use crate::domain::FileDiscardReason;
 
@@ -30,7 +31,13 @@ pub enum ReadFileOutcome {
     Discarded(FileDiscardReason),
 }
 
-/// Reads `path` up to `max_bytes`, rejecting binaries, cloud placeholders, invalid `UTF-8`, and huge files.
+enum ProbeStage {
+    Complete(Vec<u8>),
+    NeedsRemainder(Vec<u8>),
+    Discarded(FileDiscardReason),
+}
+
+/// Reads `path` up to `max_bytes`, rejecting binaries via an `8 KiB` probe before full buffering.
 #[must_use]
 pub fn read_bounded_utf8(path: &Path, max_bytes: u64) -> ReadFileOutcome {
     if is_known_binary_extension(path) {
@@ -55,10 +62,21 @@ pub fn read_bounded_utf8(path: &Path, max_bytes: u64) -> ReadFileOutcome {
         });
     }
 
-    let cap_hint = usize::try_from(meta.len().min(max_bytes)).unwrap_or(0);
-    let mut buf = Vec::with_capacity(cap_hint);
-    if file
-        .take(max_bytes.saturating_add(1))
+    let mut buf = match probe_header(&file, max_bytes, meta.len()) {
+        ProbeStage::Complete(done) => return finalize_utf8(done),
+        ProbeStage::NeedsRemainder(partial) => partial,
+        ProbeStage::Discarded(reason) => return ReadFileOutcome::Discarded(reason),
+    };
+
+    let probe_len = buf.len();
+    let remaining_allowed = max_bytes.saturating_sub(u64::try_from(probe_len).unwrap_or(u64::MAX));
+    let extra_hint = usize::try_from(meta.len().min(max_bytes))
+        .unwrap_or(0)
+        .saturating_sub(probe_len);
+    buf.reserve(extra_hint);
+
+    if (&file)
+        .take(remaining_allowed.saturating_add(1))
         .read_to_end(&mut buf)
         .is_err()
     {
@@ -69,33 +87,72 @@ pub fn read_bounded_utf8(path: &Path, max_bytes: u64) -> ReadFileOutcome {
     if byte_len > max_bytes {
         return ReadFileOutcome::Discarded(FileDiscardReason::ExceedsHardCap { byte_len });
     }
-    if starts_with_non_utf8_bom(&buf) {
-        return ReadFileOutcome::Discarded(FileDiscardReason::InvalidUtf8);
-    }
-    if buf.contains(&0) {
+    if buf[probe_len..].contains(&0) {
         return ReadFileOutcome::Discarded(FileDiscardReason::Binary);
     }
 
-    let Ok(mut content) = String::from_utf8(buf) else {
-        return ReadFileOutcome::Discarded(FileDiscardReason::InvalidUtf8);
-    };
-    if content.starts_with('\u{FEFF}') {
-        content.remove(0);
-    }
-
-    ReadFileOutcome::Text { byte_len, content }
+    finalize_utf8(buf)
 }
 
 #[cfg(windows)]
-fn is_cloud_placeholder(path: &Path) -> bool {
+pub(crate) fn is_cloud_placeholder(path: &Path) -> bool {
     // Inspect NTFS reparse/offline attributes via metadata before File::open triggers hydration.
     std::fs::symlink_metadata(path)
         .is_ok_and(|meta| is_cloud_placeholder_attributes(meta.file_attributes()))
 }
 
 #[cfg(not(windows))]
-const fn is_cloud_placeholder(_path: &Path) -> bool {
+pub(crate) const fn is_cloud_placeholder(_path: &Path) -> bool {
     false
+}
+
+fn probe_header(file: &File, max_bytes: u64, meta_len: u64) -> ProbeStage {
+    let probe_limit = max_bytes.min(u64::try_from(FILE_HEADER_PROBE_BYTES).unwrap_or(u64::MAX));
+    let probe_cap = usize::try_from(probe_limit).unwrap_or(FILE_HEADER_PROBE_BYTES);
+    let hint = usize::try_from(meta_len.min(probe_limit)).unwrap_or(probe_cap);
+    let mut buf = Vec::with_capacity(hint.saturating_add(1));
+
+    if file
+        .take(probe_limit.saturating_add(1))
+        .read_to_end(&mut buf)
+        .is_err()
+    {
+        return ProbeStage::Discarded(FileDiscardReason::Unreadable);
+    }
+
+    let byte_len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
+    if byte_len > max_bytes {
+        return ProbeStage::Discarded(FileDiscardReason::ExceedsHardCap { byte_len });
+    }
+    if starts_with_non_utf8_bom(&buf) {
+        return ProbeStage::Discarded(FileDiscardReason::InvalidUtf8);
+    }
+    if buf.contains(&0) {
+        return ProbeStage::Discarded(FileDiscardReason::Binary);
+    }
+
+    let hit_eof = buf.len() <= probe_cap;
+    if hit_eof {
+        return ProbeStage::Complete(buf);
+    }
+
+    if let Err(err) = std::str::from_utf8(&buf)
+        && err.error_len().is_some()
+    {
+        return ProbeStage::Discarded(FileDiscardReason::InvalidUtf8);
+    }
+    ProbeStage::NeedsRemainder(buf)
+}
+
+fn finalize_utf8(buf: Vec<u8>) -> ReadFileOutcome {
+    let byte_len = u64::try_from(buf.len()).unwrap_or(u64::MAX);
+    let Ok(mut content) = String::from_utf8(buf) else {
+        return ReadFileOutcome::Discarded(FileDiscardReason::InvalidUtf8);
+    };
+    if content.starts_with('\u{FEFF}') {
+        content.remove(0);
+    }
+    ReadFileOutcome::Text { byte_len, content }
 }
 
 #[cfg(any(windows, test))]

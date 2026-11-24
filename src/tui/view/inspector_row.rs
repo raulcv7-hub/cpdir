@@ -46,9 +46,9 @@ pub(super) fn build_inspector_entry_line(
             reason,
             tokens,
         } => push_unread_file_spans(&mut spans, state, node_id, &clean_path, reason, tokens),
-        InspectorEntryKind::DiscardedPrunedDir {
-            reason: PrunedDirReason::DependencyOrVcs,
-        } => push_pruned_dir_spans(&mut spans, &clean_path),
+        InspectorEntryKind::DiscardedPrunedDir { reason } => {
+            push_pruned_dir_spans(&mut spans, &clean_path, reason);
+        }
         InspectorEntryKind::DiscardedFile { reason, .. } => {
             push_discarded_file_spans(&mut spans, &clean_path, reason);
         }
@@ -114,13 +114,21 @@ fn push_unread_file_spans(
     }
 }
 
-fn push_pruned_dir_spans(spans: &mut Vec<Span<'static>>, clean_path: &str) {
+fn push_pruned_dir_spans(
+    spans: &mut Vec<Span<'static>>,
+    clean_path: &str,
+    reason: PrunedDirReason,
+) {
+    let tag = match reason {
+        PrunedDirReason::DependencyOrVcs => "[PRUNED]",
+        PrunedDirReason::IgnoredSubtree => "[IGNORED]",
+    };
     spans.push(Span::styled(
         "[ ] ",
         Style::new().fg(Color::Rgb(110, 210, 255)),
     ));
     spans.push(Span::styled(
-        "[PRUNED]",
+        tag,
         Style::new().fg(Color::Rgb(150, 155, 165)),
     ));
     spans.push(Span::raw(format!(" {clean_path}/")));

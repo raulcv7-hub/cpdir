@@ -3,12 +3,16 @@
 pub mod analyze;
 pub mod error;
 mod event_loop;
+mod ingest;
+mod loader;
 mod terminal;
 pub mod workspace;
 
 use std::io::{self, IsTerminal as _};
 use std::path::Path;
 
+use crate::application::loader::LoadConfig;
+use crate::application::terminal::TerminalGuard;
 use crate::git::GitContextConfig;
 use crate::output::ClipboardWriter;
 use crate::scanner::{ScanConfig, ScanError};
@@ -18,7 +22,7 @@ pub use analyze::analyze_tree_contents;
 pub use error::{AppError, RunOutcome};
 pub use workspace::WorkspaceSession;
 
-/// Executes the full interactive `cpdir` pipeline on `target_dir`.
+/// Executes the full interactive `cpdir` pipeline on `target_dir` without blocking terminal open.
 ///
 /// # Errors
 ///
@@ -39,16 +43,26 @@ pub fn run_interactive(
         return Err(AppError::NotATerminal);
     }
 
-    let (mut session, mut state) = WorkspaceSession::open(
-        target_dir,
-        MemoryStore::default_system(),
-        ScanConfig::default(),
-        GitContextConfig::default(),
+    let mut guard = TerminalGuard::enter()?;
+    let Some(mut loaded) = loader::load_workspace_interactive(
+        &mut guard,
+        &LoadConfig {
+            target_dir,
+            include_abs_path,
+            store: MemoryStore::default_system(),
+            scan_config: ScanConfig::default(),
+            git_config: GitContextConfig::default(),
+        },
+    )?
+    else {
+        return Ok(RunOutcome::Cancelled);
+    };
+
+    event_loop::run_tui_event_loop(
+        &mut guard,
+        &mut loaded.session,
+        &mut loaded.state,
+        loaded.bg_git,
     )?;
-    if include_abs_path {
-        state.set_include_abs_path(true);
-        session.refresh_xml_overhead(&mut state);
-    }
-    event_loop::run_tui_event_loop(&mut session, &mut state)?;
-    session.export_clipboard(state, clipboard)
+    loaded.session.export_clipboard(loaded.state, clipboard)
 }

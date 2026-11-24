@@ -10,5 +10,5 @@ pub mod tree_nav;
 
 pub use app_state::TuiAppState;
 pub use inspector::InspectorState;
-pub use modes::{AppExitAction, UiMode};
+pub use modes::{AppExitAction, LoadingPhase, LoadingProgress, UiMode};
 pub use tree_nav::TreeNavigator;

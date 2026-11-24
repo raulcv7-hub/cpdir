@@ -56,8 +56,10 @@ pub enum FileDiscardReason {
 /// Reason a directory subtree was pruned during scanning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrunedDirReason {
-    /// Matches hardcoded dependency, cache, or VCS directory exclusions.
+    /// Matches hardcoded dependency, cache, build, or VCS directory exclusions.
     DependencyOrVcs,
+    /// Ignored directory exceeding the entry threshold without active `.ignore` rescues.
+    IgnoredSubtree,
 }
 
 /// Aggregate checkbox state derived for a directory node in the TUI.

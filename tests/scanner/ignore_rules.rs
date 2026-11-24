@@ -1,4 +1,4 @@
-//! Multi-level `.ignore` > `.gitignore` precedence, source-context pruning, and case sensitivity.
+//! Multi-level `.ignore` > `.gitignore` precedence, source-context pruning, and large-ignore caps.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -8,7 +8,7 @@ use cpdir::domain::{
 };
 use cpdir::output::render_strict_xml;
 use cpdir::scanner::walker::resolve_root_name;
-use cpdir::scanner::{ScanConfig, scan_directory};
+use cpdir::scanner::{DEFAULT_RESCAN_MAX_ENTRIES, ScanConfig, rescan_pruned_dir, scan_directory};
 
 use crate::common::workspace::{WorkspaceBuilder, mid_stream_corrupt_utf8_bytes, sample_png_bytes};
 use crate::common::xml_validator::{ParsedXmlFile, parse_strict_xml};
@@ -187,6 +187,81 @@ fn preserves_source_nested_build_and_vendor_while_pruning_package_outputs() {
     if cfg!(windows) {
         assert_eq!(resolve_root_name(Path::new(r"C:\")), "C:");
     }
+}
+
+#[test]
+fn prunes_massive_gitignored_subtree_without_losing_dotignore_rescues() {
+    let ws = WorkspaceBuilder::new();
+    ws.write_text(".gitignore", "renders/\nrescued_big/\n");
+    ws.write_text("src/main.rs", "fn main() {}\n");
+    ws.populate_files("renders", 1_050, "frame");
+
+    ws.write_text("rescued_big/.ignore", "!keep.txt\n");
+    ws.write_text("rescued_big/keep.txt", "rescued inside big folder\n");
+    ws.populate_files("rescued_big/extra", 1_050, "tmp");
+
+    let scan = scan_directory(ws.root(), &ScanConfig::default()).expect("scan");
+    let pruned: Vec<(&str, PrunedDirReason)> = scan
+        .tree
+        .pruned_dirs()
+        .iter()
+        .map(|p| (p.rel_path.as_str(), p.reason))
+        .collect();
+    assert_eq!(pruned, vec![("renders", PrunedDirReason::IgnoredSubtree)]);
+
+    let xml = render_strict_xml(&scan.tree, &scan.contents, None).expect("xml");
+    let parsed = parse_strict_xml(&xml).expect("valid xml");
+    let paths: Vec<String> = parsed.files.into_iter().map(|f| f.path).collect();
+    assert!(paths.contains(&"rescued_big/keep.txt".to_owned()));
+
+    let rescan = rescan_pruned_dir(
+        ws.root(),
+        "renders",
+        &ScanConfig::default(),
+        DEFAULT_RESCAN_MAX_ENTRIES,
+    )
+    .expect("rescan renders");
+    assert_eq!(rescan.contents.len(), 1_050);
+}
+
+#[test]
+fn rescan_evaluates_source_context_relative_to_workspace_root() {
+    let ws = WorkspaceBuilder::new();
+    ws.write_text("src/custom_deps/pkg/build/gen.rs", "pub fn gen() {}\n");
+    ws.write_text("vendor/pkg/build/out.rs", "pub fn out() {}\n");
+
+    let res_in_src = rescan_pruned_dir(
+        ws.root(),
+        "src/custom_deps",
+        &ScanConfig::default(),
+        DEFAULT_RESCAN_MAX_ENTRIES,
+    )
+    .expect("rescan inside src");
+    assert!(
+        res_in_src
+            .tree
+            .nodes()
+            .iter()
+            .any(|n| n.rel_path == "pkg/build/gen.rs")
+    );
+    assert_eq!(res_in_src.tree.pruned_dirs(), []);
+
+    let res_in_vendor = rescan_pruned_dir(
+        ws.root(),
+        "vendor",
+        &ScanConfig::default(),
+        DEFAULT_RESCAN_MAX_ENTRIES,
+    )
+    .expect("rescan inside vendor");
+    assert_eq!(
+        res_in_vendor
+            .tree
+            .pruned_dirs()
+            .iter()
+            .map(|p| p.rel_path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["pkg/build"]
+    );
 }
 
 #[test]

@@ -281,4 +281,12 @@ fn tui_responsive_layout_pins_badges_on_narrow_terminals_and_scrolls() {
     }
     assert!(state.scroll_offset() > 0);
     assert!(state.cursor() < state.visible_rows().len());
+
+    // Ultra-narrow terminal (58 cols) triggers compact header badges without clipping status.
+    let mut ultra_narrow = Terminal::new(TestBackend::new(58, 18)).expect("ultra narrow");
+    let compact_screen = draw_and_dump(&mut ultra_narrow, &mut state);
+    assert!(compact_screen.contains("Tok:"));
+    assert!(compact_screen.contains("!Sec:1"));
+    assert!(compact_screen.contains("G:ON"));
+    assert!(compact_screen.contains("P:OFF"));
 }

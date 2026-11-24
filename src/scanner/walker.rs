@@ -1,13 +1,21 @@
-//! Public full-workspace scan facade and Windows root label resolution.
+//! Public full-workspace scan facade, parallel file reading, and Windows root label resolution.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf, Prefix};
+use std::sync::atomic::AtomicBool;
 
-use crate::config::limits::HARD_READ_BYTE_CAP;
-use crate::domain::{DirectoryTree, NodeId, TreeError};
+use rayon::prelude::*;
+
+use crate::config::limits::{DEFAULT_IGNORED_DIR_PRUNE_THRESHOLD, HARD_READ_BYTE_CAP};
+use crate::domain::{DirectoryTree, NodeId, NodeKind, TreeError};
+use crate::scanner::file_reader::{ReadFileOutcome, read_bounded_utf8};
 use crate::scanner::ignore_rules::IgnoreRuleStack;
-use crate::scanner::traversal::{WalkPolicy, traverse_tree};
+use crate::scanner::traversal::{
+    DiscoveredFile, DiscoveryOutput, DiscoveryProgress, WalkPolicy, WalkRequest, discover_tree,
+};
+
+const PARALLEL_READ_MIN_FILES: usize = 8;
 
 /// Runtime configuration controlling directory scanning behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,33 +85,84 @@ impl From<TreeError> for ScanError {
     }
 }
 
-/// Walks `root` iteratively, pruning dependency/VCS folders and evaluating `.ignore` > `.gitignore`.
+/// Walks `root` iteratively, pruning dependency/VCS/massive-ignored folders and reading `UTF-8` files.
 ///
 /// # Errors
 ///
 /// Returns [`ScanError`] if `root` is not a readable directory or root enumeration fails.
 pub fn scan_directory(root: &Path, config: &ScanConfig) -> Result<ScanResult, ScanError> {
+    let mut out = discover_workspace_entries(root, config, None, &mut |_| {})?;
+    let contents = read_discovered_files(&mut out.tree, &out.files, config.max_file_bytes);
+    Ok(ScanResult {
+        tree: out.tree,
+        contents,
+    })
+}
+
+pub(crate) fn discover_workspace_entries(
+    root: &Path,
+    config: &ScanConfig,
+    cancel: Option<&AtomicBool>,
+    on_progress: &mut dyn FnMut(DiscoveryProgress),
+) -> Result<DiscoveryOutput, ScanError> {
     if !root.is_dir() {
         return Err(ScanError::NotADirectory(root.to_path_buf()));
     }
 
-    let out = traverse_tree(
-        root,
-        &resolve_root_name(root),
-        IgnoreRuleStack::with_case_sensitivity(config.case_insensitive_ignores),
-        config,
-        WalkPolicy {
-            max_entries: None,
-            mark_pruned: false,
-            expand_included_dirs: true,
-            expand_ignored_dirs: config.expand_ignored_dirs,
+    discover_tree(
+        WalkRequest {
+            root_abs: root,
+            root_name: &resolve_root_name(root),
+            ignore_stack: IgnoreRuleStack::with_case_sensitivity(config.case_insensitive_ignores),
+            config,
+            policy: WalkPolicy {
+                max_entries: None,
+                ignored_dir_prune_threshold: Some(DEFAULT_IGNORED_DIR_PRUNE_THRESHOLD),
+                rel_prefix: "",
+                mark_pruned: false,
+                expand_included_dirs: true,
+                expand_ignored_dirs: config.expand_ignored_dirs,
+            },
+            cancel,
         },
-    )?;
+        on_progress,
+    )
+}
 
-    Ok(ScanResult {
-        tree: out.tree,
-        contents: out.contents,
-    })
+pub(crate) fn read_discovered_files(
+    tree: &mut DirectoryTree,
+    files: &[DiscoveredFile],
+    max_file_bytes: u64,
+) -> HashMap<NodeId, String> {
+    let outcomes: Vec<(NodeId, ReadFileOutcome)> = if files.len() < PARALLEL_READ_MIN_FILES {
+        files
+            .iter()
+            .map(|f| (f.node_id, read_bounded_utf8(&f.abs_path, max_file_bytes)))
+            .collect()
+    } else {
+        files
+            .par_iter()
+            .map(|f| (f.node_id, read_bounded_utf8(&f.abs_path, max_file_bytes)))
+            .collect()
+    };
+
+    let mut contents = HashMap::new();
+    for (id, outcome) in outcomes {
+        if let Some(node) = tree.get_mut(id) {
+            match outcome {
+                ReadFileOutcome::Text { byte_len, content } => {
+                    if let NodeKind::TextFile(file) = &mut node.kind {
+                        file.byte_len = byte_len;
+                    }
+                    contents.insert(id, content);
+                }
+                ReadFileOutcome::Discarded(reason) => {
+                    node.kind = NodeKind::DiscardedFile(reason);
+                }
+            }
+        }
+    }
+    contents
 }
 
 /// Resolves a concise display label for a scanned root directory, including Windows drive roots.

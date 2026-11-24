@@ -71,6 +71,17 @@ impl IgnoreRuleStack {
         self.layers.len()
     }
 
+    /// Returns `true` when any active `.ignore` layer contains a `!` whitelist rule.
+    #[must_use]
+    pub fn has_dot_ignore_whitelist(&self) -> bool {
+        self.layers.iter().any(|layer| {
+            layer
+                .dot_ignore
+                .as_ref()
+                .is_some_and(|gi| gi.num_whitelists() > 0)
+        })
+    }
+
     /// Loads optional `.ignore` and `.gitignore` files inside `dir_path` as a new layer.
     pub fn push_dir(&mut self, dir_path: &Path) {
         let dot_ignore =

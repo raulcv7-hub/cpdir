@@ -10,11 +10,13 @@ use crate::tui::state::TuiAppState;
 use crate::tui::view::confirm_modals::centered_fixed_rect;
 
 pub(super) fn render_help_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAppState) {
-    let popup = centered_fixed_rect(76, 56, 18, area);
+    let popup = centered_fixed_rect(76, 58, 19, area);
     frame.render_widget(Clear, popup);
 
     let git_line = if state.has_git_context() {
         "  g              Toggle <git_context> inclusion"
+    } else if state.is_git_pending() {
+        "  g              Git context loading in background..."
     } else {
         "  g              Git context unavailable outside repositories"
     };
@@ -28,11 +30,11 @@ pub(super) fn render_help_modal(frame: &mut Frame<'_>, area: Rect, state: &TuiAp
         Line::raw(""),
         help_row("Selection & Inspector", Color::Rgb(85, 220, 125)),
         Line::raw("  Space          Toggle file or subtree recursively"),
-        Line::raw("  a              Toggle All (safe defaults) / None"),
-        Line::raw("  i / n / d / s  Inspector (Unread / Discarded / Secrets)"),
+        Line::raw("  a / u          Toggle All (defaults)/None | Unselect all"),
+        Line::raw("  i / n / d / s  Inspector tabs (Unread / Discarded / Secrets)"),
         Line::raw(git_line),
         Line::raw("  p              Toggle root_path in <context_summary>"),
-        Line::raw("  Enter / Esc    Copy strict XML to clipboard / Quit"),
+        Line::raw("  Enter / Esc    Copy strict XML to clipboard | Quit (Ctrl+C)"),
         Line::raw(""),
         help_row(
             "Colors (Hue = Tokens/Secrets, Bright = Active)",

@@ -61,7 +61,7 @@ impl TuiAppState {
         }
     }
 
-    /// Toggles selection in `Unread`/`Secrets`, or requests re-ingestion for `[PRUNED]` dirs.
+    /// Toggles selection in `Unread`/`Secrets`, or requests re-ingestion for pruned dirs.
     pub fn toggle_inspector_selection(&mut self) {
         enum Action {
             ToggleNode(NodeId),
@@ -137,9 +137,11 @@ impl TuiAppState {
         self.nav.refresh(&self.tree);
 
         let note = if truncated {
-            format!("Loaded {rel_path}/ (collapsed, unselected; truncated at entry cap)")
+            format!(
+                "Loaded {rel_path}/ (collapsed, unselected; truncated at entry cap) - check [Unread] or [Esc]"
+            )
         } else {
-            format!("Loaded {rel_path}/ (collapsed & unselected)")
+            format!("Loaded {rel_path}/ (collapsed & unselected) - check [Unread] or [Esc]")
         };
 
         if let ActiveModal::Inspector(ins) = &self.modal {

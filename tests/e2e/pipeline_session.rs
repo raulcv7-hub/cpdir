@@ -55,7 +55,9 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
             .any(|n| n.rel_path == "vendor/dep.rs")
     );
 
+    // Enable `ignored.log` (index 0) and `vendor/dep.rs` (index 2) inside Unread.
     state.open_inspector_tab(InspectorTab::Unread);
+    state.toggle_inspector_selection();
     state.scroll_inspector(2);
     state.toggle_inspector_selection();
     state.close_modal();
@@ -67,7 +69,7 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
     let outcome = session
         .export_clipboard(state, &clipboard)
         .expect("export succeeds");
-    assert!(matches!(outcome, RunOutcome::Copied { files: 3, .. }));
+    assert!(matches!(outcome, RunOutcome::Copied { files: 4, .. }));
 
     let copied = clipboard.copied.borrow();
     assert_eq!(copied.len(), 1);
@@ -79,7 +81,10 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
         "root_path must be omitted by default"
     );
     let paths: Vec<String> = parsed.files.into_iter().map(|f| f.path).collect();
-    assert_eq!(paths, vec!["src/main.rs", "vendor/dep.rs", ".gitignore"]);
+    assert_eq!(
+        paths,
+        vec!["src/main.rs", "vendor/dep.rs", ".gitignore", "ignored.log"]
+    );
 
     ws.write_text("src/added.rs", "pub fn added() {}\n");
     let (mut session2, mut state2) = WorkspaceSession::open(
@@ -91,7 +96,15 @@ fn workspace_session_open_reingest_export_and_memory_roundtrip() {
     .expect("reopen workspace");
     assert!(!state2.include_git_context());
     assert!(!state2.include_abs_path());
-    assert_eq!(state2.metrics().counts.read_files, 3);
+    assert!(
+        state2
+            .tree()
+            .nodes()
+            .iter()
+            .any(|n| n.rel_path == "vendor/dep.rs"),
+        "saved override inside pruned dir must trigger bounded auto-reingest"
+    );
+    assert_eq!(state2.metrics().counts.read_files, 5);
 
     state2.set_include_abs_path(true);
     session2.refresh_xml_overhead(&mut state2);

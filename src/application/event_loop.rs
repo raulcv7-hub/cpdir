@@ -1,10 +1,12 @@
-//! Interactive `crossterm` event loop with input coalescing and buffered frame rendering.
+//! Interactive `crossterm` event loop with input coalescing, deferred Git, and buffered rendering.
 
+use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 
 use crate::application::error::AppError;
+use crate::application::loader::BackgroundGit;
 use crate::application::terminal::TerminalGuard;
 use crate::application::workspace::WorkspaceSession;
 use crate::config::limits::DEFAULT_RESCAN_MAX_ENTRIES;
@@ -13,16 +15,35 @@ use crate::tui::{
     render_active_modal_with_layout, render_tree_view_with_layout,
 };
 
+const BG_GIT_POLL_INTERVAL: Duration = Duration::from_millis(40);
+
 pub(super) fn run_tui_event_loop(
+    guard: &mut TerminalGuard,
     session: &mut WorkspaceSession,
     state: &mut TuiAppState,
+    mut bg_git: Option<BackgroundGit>,
 ) -> Result<(), AppError> {
-    let mut guard = TerminalGuard::enter()?;
     let mut layout = TuiViewportAreas::default();
     let mut needs_draw = true;
     let mut last_fp = state.overhead_fingerprint();
 
     while state.exit_action().is_none() {
+        if let Some(bg) = &bg_git {
+            match bg.try_recv() {
+                Ok(snap) => {
+                    session.attach_git_snapshot(state, snap);
+                    bg_git = None;
+                    needs_draw = true;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    session.attach_git_snapshot(state, None);
+                    bg_git = None;
+                    needs_draw = true;
+                }
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+
         if needs_draw {
             guard
                 .terminal_mut()
@@ -36,15 +57,26 @@ pub(super) fn run_tui_event_loop(
             needs_draw = false;
         }
 
-        let first = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
-        let mut reingest_needed = dispatch_app_event(state, &layout, &first, &mut needs_draw);
+        let has_event = if bg_git.is_some() {
+            event::poll(BG_GIT_POLL_INTERVAL)
+                .map_err(|err| AppError::TerminalIo(err.to_string()))?
+        } else {
+            true
+        };
 
-        while state.exit_action().is_none()
-            && event::poll(Duration::ZERO).map_err(|err| AppError::TerminalIo(err.to_string()))?
-        {
-            let next = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
-            if dispatch_app_event(state, &layout, &next, &mut needs_draw) {
-                reingest_needed = true;
+        let mut reingest_needed = false;
+        if has_event {
+            let first = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
+            reingest_needed = dispatch_app_event(state, &layout, &first, &mut needs_draw);
+
+            while state.exit_action().is_none()
+                && event::poll(Duration::ZERO)
+                    .map_err(|err| AppError::TerminalIo(err.to_string()))?
+            {
+                let next = event::read().map_err(|err| AppError::TerminalIo(err.to_string()))?;
+                if dispatch_app_event(state, &layout, &next, &mut needs_draw) {
+                    reingest_needed = true;
+                }
             }
         }
 

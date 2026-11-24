@@ -16,6 +16,7 @@ pub struct TuiAppState {
     pub(super) pending_reingest: Option<String>,
     pub(super) modal: ActiveModal,
     exit_action: Option<AppExitAction>,
+    selection_revision: u64,
 }
 
 impl TuiAppState {
@@ -32,6 +33,7 @@ impl TuiAppState {
             pending_reingest: None,
             modal: ActiveModal::None,
             exit_action: None,
+            selection_revision: 0,
         }
     }
 
@@ -97,6 +99,22 @@ impl TuiAppState {
         self.context.has_git_context()
     }
 
+    /// Returns `true` while background Git metadata extraction is still in flight.
+    #[must_use]
+    pub const fn is_git_pending(&self) -> bool {
+        self.context.is_git_pending()
+    }
+
+    /// Marks background Git extraction pending or finished.
+    pub const fn set_git_pending(&mut self, pending: bool) {
+        self.context.set_git_pending(pending);
+    }
+
+    /// Attaches resolved Git metadata tokens and initial toggle state from background loading.
+    pub fn attach_git_context(&mut self, tokens: usize, saved_enabled: Option<bool>) {
+        self.context.attach_git_context(tokens, saved_enabled);
+    }
+
     /// Returns `true` when `<git_context>` will be included in the copied XML.
     #[must_use]
     pub const fn include_git_context(&self) -> bool {
@@ -132,16 +150,10 @@ impl TuiAppState {
             .total_effective_tokens(self.metrics.counts.selected_tokens)
     }
 
-    /// Returns a compact fingerprint detecting when XML overhead needs recalculation.
+    /// Returns a collision-free monotonic revision identifying when XML overhead needs refresh.
     #[must_use]
-    pub fn overhead_fingerprint(&self) -> (usize, usize, usize, usize, bool) {
-        (
-            self.metrics.counts.read_files,
-            self.metrics.counts.unread_files,
-            self.metrics.counts.selected_tokens,
-            self.tree.pruned_dirs().len(),
-            self.include_abs_path(),
-        )
+    pub const fn overhead_fingerprint(&self) -> (u64, bool) {
+        (self.selection_revision, self.include_abs_path())
     }
 
     /// Overrides the initial Git toggle state (e.g., from persisted directory settings).
@@ -227,5 +239,6 @@ impl TuiAppState {
 
     pub(super) fn refresh_metrics(&mut self) {
         self.metrics = self.tree.compute_metrics();
+        self.selection_revision = self.selection_revision.saturating_add(1);
     }
 }

@@ -7,8 +7,8 @@ pub use crate::config::limits::DEFAULT_RESCAN_MAX_ENTRIES;
 use crate::domain::{DirectoryTree, NodeId};
 use crate::scanner::dir_entries::resolve_rel_path;
 use crate::scanner::ignore_rules::IgnoreRuleStack;
-use crate::scanner::traversal::{WalkPolicy, traverse_tree};
-use crate::scanner::walker::{ScanConfig, ScanError};
+use crate::scanner::traversal::{WalkPolicy, WalkRequest, discover_tree};
+use crate::scanner::walker::{ScanConfig, ScanError, read_discovered_files};
 
 /// Result produced by re-scanning a single pruned directory subtree under `max_entries`.
 #[derive(Debug)]
@@ -43,22 +43,30 @@ pub fn rescan_pruned_dir(
         .filter(|s| !s.is_empty())
         .unwrap_or("dir");
 
-    let out = traverse_tree(
-        &target_abs,
-        dir_name,
-        build_ancestor_ignore_stack(root, pruned_rel_path, config),
-        config,
-        WalkPolicy {
-            max_entries: Some(max_entries),
-            mark_pruned: true,
-            expand_included_dirs: false,
-            expand_ignored_dirs: false,
+    let mut out = discover_tree(
+        WalkRequest {
+            root_abs: &target_abs,
+            root_name: dir_name,
+            ignore_stack: build_ancestor_ignore_stack(root, pruned_rel_path, config),
+            config,
+            policy: WalkPolicy {
+                max_entries: Some(max_entries),
+                ignored_dir_prune_threshold: None,
+                rel_prefix: pruned_rel_path,
+                mark_pruned: true,
+                expand_included_dirs: false,
+                expand_ignored_dirs: false,
+            },
+            cancel: None,
         },
+        &mut |_| {},
     )?;
+
+    let contents = read_discovered_files(&mut out.tree, &out.files, config.max_file_bytes);
 
     Ok(RescanOutcome {
         tree: out.tree,
-        contents: out.contents,
+        contents,
         truncated: out.truncated,
     })
 }
