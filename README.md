@@ -5,13 +5,12 @@ Interactive Windows 11 TUI and CLI utility that inspects a repository tree, coun
 ## Key Features
 
 - **Clipboard-Only Strict XML 1.0 (`CDATA`):** Emits `<cpdir_context>` exclusively to the system clipboard (`stdout` stays silent). File bodies are wrapped in `<![CDATA[...]]>` (splitting literal `]]>`) with Windows `CRLF` normalized to `LF`, so SVGs, HTML/TSX, shell scripts, and existing XML entities arrive unescaped without `&lt;`, `&amp;gt;`, or `&#xD;` token noise—while staying 100% valid XML 1.0 without AST compression or comment stripping.
-- **Enriched Context Header:** Emits `<context_summary ... />` (with file counts and `pruned_dirs`) plus DFS-ordered stacked full paths in `<directory_structure>` including empty directories (`empty_dir/`) and omission markers (`[binary]`, `[UTF8]`, `[>5MB]`, `[unreadable]`, `[unselected: ...] (N) [!]`).
+- **Enriched Context Header:** Emits `<context_summary ... />` (with file counts and `pruned_dirs`) plus DFS-ordered stacked full paths in `<directory_structure>` including empty directories (`empty_dir/`) and omission/warning markers (`[binary]`, `[UTF8]`, `[>5MB]`, `[unreadable]`, `[unselected: ...] (N)`, `[!]`).
 - **Privacy by Default:** Local absolute path (`root_path="..."`) is omitted unless explicitly opted in per session via `--abs-path` or the `[p]` TUI toggle, and is never persisted to disk.
-- **Offline BPE Token Counting:** Parallel `tiktoken-rs` (`o200k_base`) counting via `rayon`. Files exceeding `50,000` tokens start unselected (`>50k`), while the live TUI header accounts for selected files, `<context_summary>`, `<directory_structure>`, XML wrappers, and active `<git_context>`.
-- **Hierarchical Ignore & Contextual Pruning:** Evaluates nested `.ignore` > `.gitignore` stacks (`.ignore` `!` rules can rescue `.gitignore` entries) while keeping unselected entries visible in the tree. Unconditionally prunes VCS/dependency trees (`.git`, `node_modules`, `target`, `.venv`, etc.) and contextually prunes `build`/`dist`/`vendor`/`obj`/`coverage`/`out` unless nested under source directories (`src/`, `lib/`, `internal/`, `cmd/`).
+- **Non-Blocking Startup & Bounded Memory:** Opens the TUI immediately with live scan progress and `Esc`/`q`/`Ctrl+C` cancellation, probes unknown files at `8 KiB` before allocating larger buffers, streams parallel `o200k_base` token counting (`rayon`) without double-buffering the repository, drops RAM buffers above inline cache budgets (`>64 KiB` unselected / `64 MiB` selected cap), and re-hydrates selected files from disk on copy.
+- **Hierarchical Ignore & GPU/C++ Pruning:** Evaluates nested `.ignore` > `.gitignore` stacks (`.ignore` `!` rules can rescue `.gitignore` entries) while keeping unselected entries visible in the tree. Unconditionally prunes VCS/dependency/build trees (`.git`, `node_modules`, `target`, `CMakeFiles`, `vcpkg_installed`, `.cache`, `.venv`, etc.), contextually prunes `build`/`dist`/`vendor`/`obj`/`coverage`/`out` outside source subtrees, and converts massive `.gitignore`d subtrees (`>1,000` entries without `.ignore` rescues) into on-demand re-ingestable `[IGNORED]` entries.
 - **Local Secret Detection Guard:** Linear-time multi-pattern scanning flags files with `[!]` while exempting template files (`.env.example`, `*.sample`, lockfiles) and common UI placeholders. Copying selected secret-flagged files requires explicit confirmation (`[x]` to exclude all flagged files).
-- **Windows-Hardened I/O & Bounded Memory:** Skips symlinks/junctions and OneDrive cloud placeholders (`OFFLINE` / `RECALL_ON_*`), enforces a `5 MiB` hard read cap, drops RAM buffers `>64 KiB` for unselected files, and re-hydrates selected files on demand before copying.
-- **Scoped Hardened Git Context:** Extracts branch, `status`, `diff --numstat`, commits, tags, and hotspots scoped to subdirectories in monorepos, with repository hooks disabled (`core.fsmonitor=`, `core.hooksPath=`, `diff.external=`, `gpg.program=`).
+- **Windows-Hardened I/O & Git Context:** Skips symlinks/junctions and OneDrive cloud placeholders (`OFFLINE` / `RECALL_ON_*`), enforces a `5 MiB` hard read cap, and extracts scoped Git metadata with repository hooks and LFS filters neutralized plus per-command timeouts.
 - **Per-Directory Delta Memory:** Persists only explicit user selection overrides and disabled-Git state under `%LOCALAPPDATA%\cpdir\state\`, so newly created files on disk default to selected.
 
 ## Installation (Windows 11)
@@ -27,11 +26,13 @@ irm https://raw.githubusercontent.com/raulcv7-hub/cpdir/main/scripts/install-win
 ### Option 2: Cargo (from crates.io or Git)
 
 Once published to `crates.io`:
+
 ```powershell
-cargo install cpdir --locked
+cargo install cpdir-cli --locked
 ```
 
 Or directly from GitHub:
+
 ```powershell
 cargo install --git https://github.com/raulcv7-hub/cpdir --locked
 ```
@@ -45,6 +46,7 @@ Installs `cpdir.exe` into `%LOCALAPPDATA%\Programs\cpdir` and adds it to your Us
 ```
 
 Optional switches:
+
 - `-UseCargoInstall`: compiles and installs into `%USERPROFILE%\.cargo\bin` via `cargo install --path . --locked --force`.
 - `-WithContextMenu`: additionally registers the optional `HKCU` Windows Explorer context menu (`cpdir install --yes`).
 
@@ -79,32 +81,32 @@ Context-menu integration is strictly opt-in, requires no administrator privilege
 
 ### Keyboard
 
-| Keys | Action |
-|---|---|
-| `Up` / `Down`, `j` / `k` | Move cursor |
-| `PgUp` / `PgDn`, `Home` / `End` | Scroll page or jump to start/end |
-| `Right` / `l`, `Left` / `h` | Expand/enter folder, collapse or jump to parent |
-| `Tab` | Fold or unfold directory under cursor |
-| `c` / `e` | Collapse all subfolders / Expand all folders |
-| `Space` | Toggle selection on file or folder subtree recursively |
-| `a` | Toggle All (safe natural defaults) / None |
-| `u` | Unselect all files |
-| `i` / `n`, `d`, `s` | Open Inspector on `Unread`, `Discarded`, or `Secrets` |
-| `g` | Toggle `<git_context>` (inside Git repositories) |
-| `p` | Toggle opt-in `root_path` in `<context_summary>` |
-| `?` | Toggle help overlay |
-| `Enter` | Render XML 1.0 and copy to clipboard |
-| `Esc`, `q`, `Ctrl+C` | Exit without modifying clipboard or saved state |
+| Keys                            | Action                                                 |
+| ------------------------------- | ------------------------------------------------------ |
+| `Up` / `Down`, `j` / `k`        | Move cursor                                            |
+| `PgUp` / `PgDn`, `Home` / `End` | Scroll page or jump to start/end                       |
+| `Right` / `l`, `Left` / `h`     | Expand/enter folder, collapse or jump to parent        |
+| `Tab`                           | Fold or unfold directory under cursor                  |
+| `c` / `e`                       | Collapse all subfolders / Expand all folders           |
+| `Space`                         | Toggle selection on file or folder subtree recursively |
+| `a`                             | Toggle All (safe natural defaults) / None              |
+| `u`                             | Unselect all files                                     |
+| `i` / `n`, `d`, `s`             | Open Inspector on `Unread`, `Discarded`, or `Secrets`  |
+| `g`                             | Toggle `<git_context>` (inside Git repositories)       |
+| `p`                             | Toggle opt-in `root_path` in `<context_summary>`       |
+| `?`                             | Toggle help overlay                                    |
+| `Enter`                         | Render XML 1.0 and copy to clipboard                   |
+| `Esc`, `q`, `Ctrl+C`            | Exit without modifying clipboard or saved state        |
 
-Inside the **Inspector** modal: `Tab`/`BackTab`/`Left`/`Right` cycle tabs, `Space` toggles unread/secret items or loads `[PRUNED]` folders on demand (collapsed and unselected, capped at 2,000 entries), `Enter` reveals and jumps to the entry in the tree, and `Esc`/`q` closes the modal.
+Inside the **Inspector** modal: `Tab`/`BackTab`/`Left`/`Right` cycle tabs (`n`/`d`/`s` jump directly), `Space` toggles unread/secret items or loads `[PRUNED]` / `[IGNORED]` folders on demand (collapsed and unselected, capped at 2,000 entries), `Enter` reveals and jumps to the entry in the tree, and `Esc`/`q` closes the modal.
 
-Inside confirmation modals: `y`/`Enter` copies anyway, `x` (secret modal) excludes all active flagged files and returns to the tree, and `n`/`Esc` cancels back to the tree.
+Inside confirmation modals: `y`/`Enter` copies anyway, `x` (secret modal) excludes all active flagged files and returns to the tree, and `n`/`Esc`/`q` cancels back to the tree.
 
 ### Mouse
 
 - **Wheel Up / Down:** Scroll tree or inspector list.
 - **Left Click on Fold Glyph (`▸` / `▾`):** Fold or unfold directory.
-- **Left Click on Tree / Inspector Row:** Focus row and toggle selection (or load `[PRUNED]` folder).
+- **Left Click on Tree / Inspector Row:** Focus row and toggle selection (or load `[PRUNED]` / `[IGNORED]` folder).
 - **Left Click on Inspector Tab Header:** Switch between `Unread`, `Discarded`, and `Secrets`.
 
 ### Color Coding
