@@ -232,9 +232,11 @@ fn defaults_pruning_and_binary_extension_tables_preserve_safe_folders() {
         ".Venv",
         ".IDEA",
         "CMakeFiles",
+        ".vcpkg",
         "vcpkg_installed",
         "cmake-build-release",
         ".cache",
+        ".clangd",
         "DerivedDataCache",
     ] {
         assert!(is_pruned_dir_name(dir_name), "should prune {dir_name}");
