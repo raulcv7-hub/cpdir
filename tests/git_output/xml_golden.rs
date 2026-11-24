@@ -187,6 +187,30 @@ fn golden_workspace_preserves_stacked_paths_empty_dirs_badges_and_cdata_xml() {
 }
 
 #[test]
+fn golden_selected_secret_file_still_emits_warning_marker_in_directory_structure() {
+    let mut tree = DirectoryTree::new("sec_tree");
+    let id = tree
+        .add_text_file(
+            DirectoryTree::ROOT,
+            "keys.ts",
+            TextFileData {
+                byte_len: 20,
+                tokens: 6,
+                secret_hits: 1,
+                state: TextFileState::new(NaturalSelection::Included),
+            },
+        )
+        .expect("add keys.ts");
+    let contents = HashMap::from([(id, "export const k = 1;\n".to_owned())]);
+
+    let xml = render_strict_xml(&tree, &contents, None).expect("xml");
+    let parsed = parse_strict_xml(&xml).expect("valid xml");
+    let dir_tree = parsed.directory_structure.expect("directory_structure");
+    assert!(dir_tree.contains("    keys.ts [!]\n"));
+    assert_eq!(parsed.files.len(), 1);
+}
+
+#[test]
 fn golden_cdata_avoids_double_escaping_in_svgs_scripts_and_crlf_docs() {
     let svg_body = "<svg viewBox=\"0 0 10 10\"><path d=\"M0 0\"/>&gt;</svg>\r\n";
     let sh_body = "#!/usr/bin/env bash\r\nsvgo \"$1\" >/dev/null 2>&1\r\n";

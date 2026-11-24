@@ -90,7 +90,7 @@ fn handle_help_key(state: &mut TuiAppState, code: KeyCode) {
 
 fn handle_confirm_key(state: &mut TuiAppState, code: KeyCode, allow_exclude_secrets: bool) {
     match code {
-        KeyCode::Enter | KeyCode::Char('y' | 'Y' | 's' | 'S') => {
+        KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
             state.confirm_copy_anyway();
         }
         KeyCode::Char('x' | 'X') if allow_exclude_secrets => {

@@ -94,9 +94,9 @@ fn render_stacked_directory_structure(tree: &DirectoryTree, out: &mut String) {
                     out.push_str("] (");
                     out.push_str(&format_token_count(file.tokens));
                     out.push(')');
-                    if file.secret_hits > 0 {
-                        out.push_str(" [!]");
-                    }
+                }
+                if file.secret_hits > 0 {
+                    out.push_str(" [!]");
                 }
                 out.push('\n');
             }
