@@ -1,6 +1,7 @@
 //! Individual hardened `git` CLI queries scoped to `prefix` inside the repository.
 
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use crate::domain::{GitCommitEntry, GitDiffNumstatEntry, GitHotspotEntry, GitTagEntry};
 use crate::git::context::GitContextConfig;
@@ -12,12 +13,13 @@ pub(super) fn query_branch_and_status(
     repo_dir: &Path,
     config: &GitContextConfig,
     prefix: &str,
+    cancel: Option<&AtomicBool>,
 ) -> (String, Vec<String>) {
     let mut args = vec!["status", "--porcelain=v1", "-b"];
     if !prefix.is_empty() {
         args.extend(["--", "."]);
     }
-    let Some(raw) = run_git_hardened(repo_dir, &args) else {
+    let Some(raw) = run_git_hardened(repo_dir, &args, cancel) else {
         return ("unknown".to_owned(), Vec::new());
     };
     parse_branch_and_status(&raw, prefix, config.max_working_tree_lines)
@@ -27,6 +29,7 @@ pub(super) fn query_diff_numstat(
     repo_dir: &Path,
     config: &GitContextConfig,
     prefix: &str,
+    cancel: Option<&AtomicBool>,
 ) -> Vec<GitDiffNumstatEntry> {
     if config.max_diff_numstat_lines == 0 {
         return Vec::new();
@@ -35,7 +38,7 @@ pub(super) fn query_diff_numstat(
     if !prefix.is_empty() {
         head_args.extend(["--relative", "--", "."]);
     }
-    if let Some(raw) = run_git_hardened(repo_dir, &head_args) {
+    if let Some(raw) = run_git_hardened(repo_dir, &head_args, cancel) {
         return parse_diff_numstat(&raw, config.max_diff_numstat_lines);
     }
 
@@ -50,7 +53,7 @@ pub(super) fn query_diff_numstat(
     if !prefix.is_empty() {
         cached_args.extend(["--relative", "--", "."]);
     }
-    let Some(raw) = run_git_hardened(repo_dir, &cached_args) else {
+    let Some(raw) = run_git_hardened(repo_dir, &cached_args, cancel) else {
         return Vec::new();
     };
     parse_diff_numstat(&raw, config.max_diff_numstat_lines)
@@ -60,6 +63,7 @@ pub(super) fn query_recent_commits(
     repo_dir: &Path,
     config: &GitContextConfig,
     prefix: &str,
+    cancel: Option<&AtomicBool>,
 ) -> Vec<GitCommitEntry> {
     if config.max_commits == 0 {
         return Vec::new();
@@ -74,13 +78,17 @@ pub(super) fn query_recent_commits(
     if !prefix.is_empty() {
         args.extend(["--", "."]);
     }
-    let Some(raw) = run_git_hardened(repo_dir, &args) else {
+    let Some(raw) = run_git_hardened(repo_dir, &args, cancel) else {
         return Vec::new();
     };
     parse_recent_commits(&raw, config.max_commit_body_chars)
 }
 
-pub(super) fn query_recent_tags(repo_dir: &Path, config: &GitContextConfig) -> Vec<GitTagEntry> {
+pub(super) fn query_recent_tags(
+    repo_dir: &Path,
+    config: &GitContextConfig,
+    cancel: Option<&AtomicBool>,
+) -> Vec<GitTagEntry> {
     if config.max_tags == 0 {
         return Vec::new();
     }
@@ -94,6 +102,7 @@ pub(super) fn query_recent_tags(repo_dir: &Path, config: &GitContextConfig) -> V
             "--format=%(refname:short)%1f%(contents:subject)%1f%(contents:body)%00",
             "refs/tags",
         ],
+        cancel,
     ) else {
         return Vec::new();
     };
@@ -104,6 +113,7 @@ pub(super) fn query_hotspots(
     repo_dir: &Path,
     config: &GitContextConfig,
     prefix: &str,
+    cancel: Option<&AtomicBool>,
 ) -> Vec<GitHotspotEntry> {
     if config.max_hotspots == 0 || config.hotspot_commit_window == 0 {
         return Vec::new();
@@ -120,7 +130,7 @@ pub(super) fn query_hotspots(
         // Scope hotspot commit history and emitted file paths strictly to the opened subfolder.
         args.extend(["--relative", "--", "."]);
     }
-    let Some(raw) = run_git_hardened(repo_dir, &args) else {
+    let Some(raw) = run_git_hardened(repo_dir, &args, cancel) else {
         return Vec::new();
     };
     parse_hotspots(&raw, config.max_hotspots)

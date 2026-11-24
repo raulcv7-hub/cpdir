@@ -1,6 +1,7 @@
 //! Configuration and high-level snapshot assembly for scoped `<git_context>` extraction.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::limits::{
     DEFAULT_GIT_HOTSPOT_COMMIT_WINDOW, DEFAULT_GIT_MAX_COMMIT_BODY_CHARS, DEFAULT_GIT_MAX_COMMITS,
@@ -59,13 +60,31 @@ pub fn extract_git_context(
     extract_git_context_status(repo_dir, config).into_option()
 }
 
+/// Extracts Git repository metadata for `repo_dir` with cooperative cancellation support.
+#[must_use]
+pub fn extract_git_context_cancelable(
+    repo_dir: &Path,
+    config: &GitContextConfig,
+    cancel: &AtomicBool,
+) -> Option<GitContextSnapshot> {
+    extract_git_context_inner(repo_dir, config, Some(cancel)).into_option()
+}
+
 /// Extracts Git metadata for `repo_dir` while preserving repository availability diagnostics.
 #[must_use]
 pub fn extract_git_context_status(
     repo_dir: &Path,
     config: &GitContextConfig,
 ) -> GitAvailability<GitContextSnapshot> {
-    let prefix = match probe_work_tree(repo_dir) {
+    extract_git_context_inner(repo_dir, config, None)
+}
+
+fn extract_git_context_inner(
+    repo_dir: &Path,
+    config: &GitContextConfig,
+    cancel: Option<&AtomicBool>,
+) -> GitAvailability<GitContextSnapshot> {
+    let prefix = match probe_work_tree(repo_dir, cancel) {
         GitAvailability::Available(prefix) => prefix,
         GitAvailability::NotARepository => return GitAvailability::NotARepository,
         GitAvailability::Unavailable { reason } => {
@@ -73,13 +92,40 @@ pub fn extract_git_context_status(
         }
     };
 
-    let (branch, working_tree_lines) = query_branch_and_status(repo_dir, config, &prefix);
+    let (branch, working_tree_lines) = query_branch_and_status(repo_dir, config, &prefix, cancel);
+    if is_cancelled(cancel) {
+        return cancelled_status();
+    }
+    let working_diff_numstat = query_diff_numstat(repo_dir, config, &prefix, cancel);
+    if is_cancelled(cancel) {
+        return cancelled_status();
+    }
+    let recent_commits = query_recent_commits(repo_dir, config, &prefix, cancel);
+    if is_cancelled(cancel) {
+        return cancelled_status();
+    }
+    let recent_tags = query_recent_tags(repo_dir, config, cancel);
+    if is_cancelled(cancel) {
+        return cancelled_status();
+    }
+    let hotspots = query_hotspots(repo_dir, config, &prefix, cancel);
+
     GitAvailability::Available(GitContextSnapshot {
         branch,
         working_tree_lines,
-        working_diff_numstat: query_diff_numstat(repo_dir, config, &prefix),
-        recent_commits: query_recent_commits(repo_dir, config, &prefix),
-        recent_tags: query_recent_tags(repo_dir, config),
-        hotspots: query_hotspots(repo_dir, config, &prefix),
+        working_diff_numstat,
+        recent_commits,
+        recent_tags,
+        hotspots,
     })
+}
+
+fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
+}
+
+fn cancelled_status() -> GitAvailability<GitContextSnapshot> {
+    GitAvailability::Unavailable {
+        reason: "git extraction cancelled".to_owned(),
+    }
 }

@@ -6,5 +6,8 @@ mod queries;
 mod runner;
 mod status_parser;
 
-pub use context::{GitContextConfig, extract_git_context, extract_git_context_status};
+pub use context::{
+    GitContextConfig, extract_git_context, extract_git_context_cancelable,
+    extract_git_context_status,
+};
 pub use runner::GitAvailability;

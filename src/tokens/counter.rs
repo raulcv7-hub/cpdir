@@ -6,6 +6,8 @@ use std::sync::OnceLock;
 use rayon::prelude::*;
 use tiktoken_rs::CoreBPE;
 
+use crate::config::limits::{TOKEN_CHUNK_TARGET_BYTES, TOKEN_CHUNK_THRESHOLD_BYTES};
+
 const PARALLEL_MIN_FILES: usize = 8;
 
 static O200K_BPE: OnceLock<Result<CoreBPE, String>> = OnceLock::new();
@@ -56,9 +58,19 @@ impl TokenCounter {
     }
 
     /// Counts ordinary BPE tokens in `text` without failing on special LLM control markers.
+    ///
+    /// Inputs above [`TOKEN_CHUNK_THRESHOLD_BYTES`] are split along UTF-8 newline boundaries into
+    /// bounded parallel slices so single giant headers or minified assets never stall or spike RAM.
     #[must_use]
     pub fn count(&self, text: &str) -> usize {
-        self.bpe.encode_ordinary(text).len()
+        if text.len() <= TOKEN_CHUNK_THRESHOLD_BYTES {
+            return self.bpe.encode_ordinary(text).len();
+        }
+        let chunks = split_token_chunks(text, TOKEN_CHUNK_TARGET_BYTES);
+        chunks
+            .par_iter()
+            .map(|&chunk| self.bpe.encode_ordinary(chunk).len())
+            .sum()
     }
 
     /// Counts tokens for `(key, text)` entries sequentially or in parallel via `rayon`.
@@ -76,4 +88,35 @@ impl TokenCounter {
                 .collect()
         }
     }
+}
+
+fn split_token_chunks(text: &str, target_bytes: usize) -> Vec<&str> {
+    let total = text.len();
+    let step = target_bytes.max(64);
+    let mut chunks = Vec::with_capacity(total / step + 1);
+    let mut start = 0usize;
+
+    while start < total {
+        let mut end = start.saturating_add(step).min(total);
+        if end < total {
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            if let Some(nl_offset) = text[start..end].rfind('\n')
+                && nl_offset >= step / 2
+            {
+                end = start + nl_offset + 1;
+            }
+        }
+        if end == start {
+            end = start
+                + text[start..]
+                    .chars()
+                    .next()
+                    .map_or(total - start, char::len_utf8);
+        }
+        chunks.push(&text[start..end]);
+        start = end;
+    }
+    chunks
 }
